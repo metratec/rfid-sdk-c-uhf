@@ -19,6 +19,12 @@ Public SDK to use Metratec UHF RFID-Readers from C code
 
 If you have a different device type change the value to match yours.
 
+The following device types are currently supported:  
+- PLRM
+- DESKID_UHF_V2
+- PULSAR_LR
+- QRG2
+
 ## Start your own project
 
 ### Basic
