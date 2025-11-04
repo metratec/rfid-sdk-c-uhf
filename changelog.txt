@@ -1,0 +1,40 @@
+Changelog for metratec uhf-reader sdk for C
+
+0.4.0
+=====
+Release Date: 04.11.2025
+
+- Added support for QRG2
+- Implemented FW-Revision checking into init
+
+0.3.1
+=====
+Release Date: 07.05.2025
+
+- Minor CMake changes
+
+0.3.0
+=====
+Release Date: 05.05.2025
+
+- Adding basic posix example
+- Changes to support zephyr example
+- Fix in inventory (false debug output)
+
+0.2.0
+=====
+Release Date: 05.05.2025
+
+- CMake reorganize
+- HAL functions moved to their own file (hal.h)
+
+0.1.0
+=====
+Release Date: 29.04.2025
+
+- Initial prerelease for testing
+- Not feature complete (for example select, kill, lock / unlock are missing)
+- Core features are in (inventory, read, write, most settings)
+- Example code exists for Pulsar_LR and PLRM
+- Example code for DeskID is not ready for use
+- Doxygen build documentation basics
