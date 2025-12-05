@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include "../public/typedef.h"
 #include "receive_buffer.h"
 
 enum uhfv2_frametype {

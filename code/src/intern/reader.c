@@ -105,7 +105,7 @@ static int _frame_resolve(void)
         break;
     }
 
-    mt_uhf_current_frame_handled();
+    (void)mt_uhf_current_frame_handled();
     if (ret == EXIT_SUCCESS || ret == -EFAULT)
         reader.resp.state = uhf_resp_state_start;
     return ret;
@@ -194,23 +194,14 @@ int mt_uhf_device_reset(void)
 
     reader.cmd.data = NULL;
 
-    reader.resp.state                        = uhf_resp_state_start;
-    reader.resp.frame.last_data_match        = NULL;
-    reader.resp.frame.current.type           = uhfv2_frametype_none;
-    reader.resp.frame.current.data           = NULL;
-    reader.resp.frame.last.type              = uhfv2_frametype_none;
-    reader.resp.frame.last.data              = NULL;
-    reader.resp.running_cinv                 = false;
-    reader.resp.default_timeout.cinv_running = 10000;
-    reader.resp.default_timeout.base         = 1000;
-    uint32_t start                           = mt_rfid_reader_get_time();
+    reader.resp.state                 = uhf_resp_state_start;
+    reader.resp.frame.last_data_match = NULL;
+    reader.resp.frame.current.type    = uhfv2_frametype_none;
+    reader.resp.frame.current.data    = NULL;
+    reader.resp.frame.last.type       = uhfv2_frametype_none;
+    reader.resp.frame.last.data       = NULL;
+    reader.resp.running_cinv          = false;
 
-    while (1) {
-        uint32_t done = mt_rfid_reader_get_time() - start;
-        if (done >= 2000)
-            break;
-        mt_cmd_wait(2000 - done);
-    }
     return ret;
 }
 
@@ -247,7 +238,6 @@ static int _id_update_cb(const char *prefix, char *data, bool finalized)
             return -EBADMSG;
 
         memcpy(reader.id.hw_name, data, name_len);
-        //memset(reader.id.hw_name + name_len, 0, sizeof(reader.id.hw_name) - name_len);
         memcpy(reader.id.hw_rev, data + name_len + 1, rev_len);
         reader.id.known_parts |= 0x0C;
         return EXIT_SUCCESS;
@@ -276,8 +266,18 @@ int mt_update_reader_identification(void)
         /*Check if Minimum Firmware Version was returned*/
         int fw_rev;
         mt_parse_int(reader.id.fw_rev, sizeof(reader.id.fw_rev) - 1, &fw_rev);
-        if (fw_rev < MT_UHF_MINIMUM_FW)
-            ret = -EINVAL;
+        if (fw_rev < MT_UHF_MINIMUM_FW) {
+            char assert_string[128];
+
+            snprintf(assert_string,
+                     sizeof(assert_string),
+                     "FW revision issue: %u needed, but got %i (parsed from '%s')\n",
+                     MT_UHF_MINIMUM_FW,
+                     fw_rev,
+                     reader.id.fw_rev);
+            mt_rfid_reader_assert(false, assert_string);
+            ret = -ENODEV;
+        }
 #endif
     }
 
@@ -308,12 +308,16 @@ int mt_uhf_update_rf_mode(void)
 
 bool mt_uhf_rf_mode_valid(enum mt_uhf_rf_mode mode)
 {
+#ifdef MT_DEVICE_VALID_MODES
     switch (mode) {
     MT_DEVICE_VALID_MODES:
         return true;
     default:
         return false;
     }
+#else
+    return true;
+#endif
 }
 
 bool mt_uhf_mode_matches_region(enum mt_uhf_region region, enum mt_uhf_rf_mode rf_mode)

@@ -55,8 +55,9 @@ int mt_uhf_inventory(mt_uhf_tag_cb cb, struct mt_uhf_inventory_buffer *buffer, u
     if (reader.state.inv_format == uhfv2_inventory_tag_data_format_unknown)
         return -ENAVAIL;
     if (buffer) {
-        buffer->tags.fill = 0;
-        buffer->antenna   = 0;
+        buffer->tags.fill  = 0;
+        buffer->tags.found = 0;
+        buffer->antenna    = 0;
     }
 
     reader.tag.cb = cb;
@@ -71,8 +72,9 @@ int mt_uhf_inventory_automux(mt_uhf_tag_cb                   cb,
     if (reader.state.inv_format == uhfv2_inventory_tag_data_format_unknown)
         return -ENAVAIL;
     if (buffer) {
-        buffer->tags.fill = 0;
-        buffer->antenna   = 0;
+        buffer->tags.fill  = 0;
+        buffer->tags.found = 0;
+        buffer->antenna    = 0;
     }
 
     reader.tag.cb = cb;
@@ -150,6 +152,11 @@ static int _inventory_inv_data_cb(const char *prefix, char *data, bool finalized
 
     struct mt_uhf_inventory_buffer *inv_buffer;
     inv_buffer = continious ? reader.tag.inv_buf : mt_uhf_get_usr_data();
+    if (inv_buffer && continious && inv_buffer->antenna) {
+        //known antenna so the last round was done, reset the antenna and length
+        inv_buffer->antenna   = 0;
+        inv_buffer->tags.fill = inv_buffer->tags.found = 0;
+    }
     if (ret == 0) { //Parsed a tag successfully
         bool put_to_buffer = true;
         if (reader.tag.cb)
@@ -165,6 +172,8 @@ static int _inventory_inv_data_cb(const char *prefix, char *data, bool finalized
         return ret;
     //else round ended, got antenna number
     reader.tag.antenna = ret;
+    if (inv_buffer)
+        inv_buffer->antenna = reader.tag.antenna;
     if (reader.tag.cb)
         reader.tag.cb(NULL);
     if (continious && reader.cinv_round_cb)
@@ -185,8 +194,9 @@ int mt_uhf_inventory_reported(mt_uhf_tag_cb                   cb,
     snprintf(cmd, sizeof(cmd), "AT+INVR=%u", run_time_ms);
 
     if (buffer) {
-        buffer->tags.fill = 0;
-        buffer->antenna   = 0;
+        buffer->tags.fill  = 0;
+        buffer->tags.found = 0;
+        buffer->antenna    = 0;
     }
     reader.tag.cb = cb;
     int ret       = mt_uhf_get_data(cmd, _inventory_invr_data_cb, buffer, timeout_ms);
@@ -213,8 +223,9 @@ int mt_uhf_inventory_reported_start_continious(
         reader.tag.cb      = cb;
         reader.tag.inv_buf = buffer;
         if (buffer) {
-            buffer->tags.fill = 0;
-            buffer->antenna   = 0;
+            buffer->tags.fill  = 0;
+            buffer->tags.found = 0;
+            buffer->antenna    = 0;
         }
     }
     return ret;
@@ -238,8 +249,9 @@ int mt_uhf_inventory_start_continious(mt_uhf_tag_cb                   cb,
         reader.tag.cb        = cb;
         reader.tag.inv_buf   = buffer;
         if (buffer) {
-            buffer->tags.fill = 0;
-            buffer->antenna   = 0;
+            buffer->tags.fill  = 0;
+            buffer->tags.found = 0;
+            buffer->antenna    = 0;
         }
     }
     return ret;
@@ -263,8 +275,9 @@ int mt_uhf_inventory_automux_start_continious(
         reader.tag.cb      = cb;
         reader.tag.inv_buf = buffer;
         if (buffer) {
-            buffer->tags.fill = 0;
-            buffer->antenna   = 0;
+            buffer->tags.fill  = 0;
+            buffer->tags.found = 0;
+            buffer->antenna    = 0;
         }
     }
     return ret;
@@ -301,6 +314,8 @@ static int _inventory_invr_data_cb(const char *prefix, char *data, bool finalize
     if (ret == EXIT_SUCCESS) { //Round finished
         if (!cinvr)            //only continious has rounds
             return -EBADMSG;
+        if (inv_buffer)
+            inv_buffer->antenna = reader.tag.antenna;
         reader.resp.state = uhf_resp_state_start;
         if (reader.tag.cb)
             reader.tag.cb(NULL);
@@ -321,15 +336,16 @@ static int _inventory_invr_data_cb(const char *prefix, char *data, bool finalize
 static int _parse_inv_data_info(char *data, size_t len)
 {
     mt_rfid_reader_assert(data && len, "No data to parse");
-    const char INV_ROUND_FINISH[] = "ROUND FINISHED, ANT=";
-    const char INV_NO_TAGS[]      = "NO TAGS FOUND";
-    const char REPORT_FINISHED[]  = "REPORT FINISHED";
+    const char INV_ROUND_FINISH_ANTENNA[]    = "ROUND FINISHED, ANT=";
+    const char INV_ROUND_FINISH_NO_ANTENNA[] = "ROUND FINISHED";
+    const char INV_NO_TAGS[]                 = "NO TAGS FOUND";
+    const char REPORT_FINISHED[]             = "REPORT FINISHED";
 
     //so there is at least one byte for the antenna number
-    if (len >= sizeof(INV_ROUND_FINISH) &&
-        !memcmp(data, INV_ROUND_FINISH, sizeof(INV_ROUND_FINISH) - 1))
+    if (len >= sizeof(INV_ROUND_FINISH_ANTENNA) &&
+        !memcmp(data, INV_ROUND_FINISH_ANTENNA, sizeof(INV_ROUND_FINISH_ANTENNA) - 1))
     {
-        size_t pre_antennna_len = (sizeof(INV_ROUND_FINISH) - 1);
+        size_t pre_antennna_len = (sizeof(INV_ROUND_FINISH_ANTENNA) - 1);
         size_t antenna_len      = len - pre_antennna_len;
         if (antenna_len > 2 || antenna_len == 0)
             return -EBADMSG;
@@ -347,6 +363,14 @@ static int _parse_inv_data_info(char *data, size_t len)
             return -EBADMSG;
         return antenna;
     }
+    if ((len == (sizeof(INV_ROUND_FINISH_NO_ANTENNA) - 1)) &&
+        !memcmp(data, INV_ROUND_FINISH_NO_ANTENNA, sizeof(INV_ROUND_FINISH_NO_ANTENNA) - 1))
+    {
+#if MAX_ANTENNAS_MUXED > 1
+        return -EBADMSG;
+#endif
+        return 1;
+    }
     if ((len == (sizeof(INV_NO_TAGS) - 1)) && !memcmp(data, INV_NO_TAGS, sizeof(INV_NO_TAGS) - 1)) {
         //no tags
         return -ENODATA;
@@ -354,7 +378,6 @@ static int _parse_inv_data_info(char *data, size_t len)
     if ((len == (sizeof(REPORT_FINISHED) - 1)) &&
         !memcmp(data, REPORT_FINISHED, sizeof(REPORT_FINISHED) - 1))
     {
-        //no tags
         return 0;
     }
     //any other error
@@ -472,19 +495,15 @@ static inline void _buffer_tag(struct mt_uhf_inventory_buffer *inv_buffer)
 {
     if (!inv_buffer)
         return;
-    inv_buffer->tags.found++;
-    if (inv_buffer->tags.fill == 0)
-        inv_buffer->antenna = reader.tag.antenna;
-    else
-        mt_rfid_reader_assert(inv_buffer->tags.fill == reader.tag.antenna,
-                              "Unexpected antenna change during inventory");
-    mt_rfid_reader_assert(inv_buffer->tags.found > inv_buffer->tags.fill,
-                          "tag buffering fill error");
+    mt_rfid_reader_assert(inv_buffer->antenna == 0, "Unexpected antenna state during inventory");
+    mt_rfid_reader_assert(inv_buffer->tags.found >= inv_buffer->tags.fill &&
+                              inv_buffer->tags.fill <= inv_buffer->tags.size,
+                          "Tag buffering fill error");
 
+    inv_buffer->tags.found++;
     if (!inv_buffer->tags.size || inv_buffer->tags.fill >= inv_buffer->tags.size - 1)
         return;
-    memcpy(inv_buffer->tags.buffer + inv_buffer->tags.fill,
-           &reader.tag.last,
-           sizeof(struct mt_uhf_gen2_tag));
+    memcpy(
+        inv_buffer->tags.buffer + inv_buffer->tags.fill, &reader.tag.last, sizeof(reader.tag.last));
     inv_buffer->tags.fill++;
 }

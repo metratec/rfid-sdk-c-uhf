@@ -15,11 +15,11 @@
 #ifdef MT_DEVICE_TYPE_SET
 #error "Multiple device type includes"
 #else
-#define MT_DEVICE_TYPE_SET
+#define MT_DEVICE_TYPE_SET "DESKID_ETSI"
 #endif
 #include <stdint.h>
 
-#define MT_UHF_MINIMUM_FW 107
+#define MT_UHF_MINIMUM_FW 107U
 
 #define MT_UHF_ANTENNA_COUNT 1
 #define MT_UHF_GPO_COUNT     0
@@ -50,15 +50,12 @@
 
 #define MT_DEVICE_DEFAULT_BAUDRATE 115200
 
-//last colon missing so it can be in the code to look proper
-#define MT_DEVICE_VALID_MODES \
-    case mt_uhf_rf_mode_222:  \
-    case mt_uhf_rf_mode_223:  \
-    case mt_uhf_rf_mode_241:  \
-    case mt_uhf_rf_mode_244:  \
-    case mt_uhf_rf_mode_285
+//no special modes, just by region
+#undef MT_DEVICE_VALID_MODES
 
 //It's bit field so just add them
 #define MT_DEVICE_VALID_REGIONS (mt_uhf_region_etsi)
 
 #define MT_UHF_SELECT_DATA_MAX_LEN 18
+
+#define MT_UHF_RSSI_THRESHOLD_UNSUPPORTED

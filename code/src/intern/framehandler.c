@@ -127,7 +127,7 @@ int mt_uhf_framehandler(char *data, size_t data_len)
 invalid:
     reader.resp.frame.current.type = uhfv2_frametype_invalid;
     reader.resp.frame.current.data = NULL;
-    mt_uhf_current_frame_handled();
+    (void)mt_uhf_current_frame_handled();
     return -EBADMSG;
 }
 
@@ -142,7 +142,6 @@ static int _framehandler_dataframe(void)
     mt_rfid_reader_assert(frame->type == uhfv2_frametype_data_element ||
                               frame->type == uhfv2_frametype_data_finish,
                           "No data frame");
-    // printf("Data: %s\n", frame->data);
     size_t len = strlen(frame->data);
     if (len < 2)
         return -EBADMSG;

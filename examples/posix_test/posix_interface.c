@@ -12,6 +12,8 @@
 
 #include <posix_interface.h>
 
+volatile bool running = true;
+
 int posix_interface_init(void)
 {
     // struct sigaction saquit;
@@ -22,10 +24,10 @@ int posix_interface_init(void)
     return EXIT_SUCCESS;
 }
 
-void signal_handler_QUIT(int status)
-{
-    running = false;
-}
+// void signal_handler_QUIT(int status)
+// {
+//     running = false;
+// }
 
 void mt_rfid_reader_assert_log(char *message)
 {

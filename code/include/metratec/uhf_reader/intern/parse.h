@@ -55,3 +55,11 @@ int mt_parse_hex_array_to_bytes(const char *hex_array,
  *                  false if any character is not in 0-9, A-F
  */
 bool mt_parse_check_hex(const char *data, unsigned data_len);
+
+/**
+ * @brief           Prints 2 times data_len ASCII chars to target
+ * @param data      The data to print as hex
+ * @param data_len  Amount of data in bytes
+ * @param target    A buffer to put the data to. Must have 2*data_len bytes available
+ */
+void mt_print_hex(const uint8_t *data, size_t data_len, char *target);

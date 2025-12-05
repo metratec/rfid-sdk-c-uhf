@@ -12,18 +12,24 @@ Public SDK to use Metratec UHF RFID-Readers from C code
 ## Building the library and example projects (for PLRM)
 
 - Call ```cmake -B build -S ./ -DCMAKE_BUILD_TYPE=Release -DMT_UHF_DEVICE_TYPE=PLRM -DEXAMPLE_POSIX_BASIC=1```
-- Call ```make -C build/ sample_posix_PLRM```
-- Call instead ```make -C build/ mt_uhf_sdk_c``` to only build the library
-- Generates executable POSIX into build/examples/posix_basic
-- Generated library file is build/code/libmt_uhf_sdk_c.a
+- Call ```make -C build/ mt_uhf_sdk_c``` to only build the library
+  - Generated library file is build/code/libmt_uhf_sdk_c.a
+- Call ```make -C build/ sample_posix_basic_PLRM``` to build the basic example
+  - Generates executable POSIX into build/examples/posix_basic
 
 If you have a different device type change the value to match yours.
 
-The following device types are currently supported:  
+The following device types are currently supported:
+
 - PLRM
-- DESKID_UHF_V2
-- PULSAR_LR
-- QRG2
+- QRG2_ETSI
+- QRG2_FCC
+
+The following devices are not officially supported but will likely work. They need to be added to the list 
+of supported devices in CMakeLists.txt first:
+
+- DESKID_UHF_V2_ETSI
+- DESKID_UHF_V2_FCC
 
 ## Start your own project
 
@@ -71,10 +77,12 @@ code/include/uhf_reader/hal.h
 
 - Prepare the communication interface and everything else the host system needs
 - if the device header include is not handled by CMake include the matching device header file
-- call ```uhf_init()``` with 2 parameters (both optional, so they can be NULL)
+- call ```uhf_init(...)``` with parameters
   - unknown_frame_cb is a function to call if any data is received that's false formated (this can be logged and used for debugging)
   - polling_cb is a function to call to get more data. If this is NULL the user has to use ```mt_rfid_reader_rx()``` to push the data
     from a different thread or ISR
+  - blocking_cb is called if the SDK is in a blocking state so the user might do things during this periods
+    especially if there is no polling_cb set
 - Call struct mt_uhf_reader_identification *id = mt_uhf_get_identification();
   to get the information (like firmware revision) from the device
 - Use setting functions as needed, for example 
@@ -85,5 +93,5 @@ code/include/uhf_reader/hal.h
 
 ### The first inventory  
 - Set up an inventory buffer or an inventory callback
-- Call and inventory function, usually start with ```mt_uhf_inventory()```
-- Printout the inventory data from the callback or the buffer (or both) the way you system supports
+- Call an inventory function, usually start with ```mt_uhf_inventory()```
+- Printout the inventory data from the callback or the buffer (or both) the way your system supports

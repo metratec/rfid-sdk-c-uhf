@@ -116,3 +116,15 @@ bool mt_parse_check_hex(const char *data, unsigned data_len)
         }
     return true;
 }
+
+static void _print_nibble(uint8_t n, char *t)
+{
+    *t = (n <= 9) ? n + '0' : (n - 0xA + 'A');
+}
+void mt_print_hex(const uint8_t *data, size_t data_len, char *target)
+{
+    for (size_t done = 0; done < data_len; done++) {
+        _print_nibble(data[done] >> 4, target++);
+        _print_nibble(data[done] & 0xF, target++);
+    }
+}

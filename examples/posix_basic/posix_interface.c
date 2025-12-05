@@ -12,8 +12,20 @@
 
 #include <posix_interface.h>
 
+volatile bool running = true;
+
+// void signal_handler_QUIT(int status)
+// {
+//     running = false;
+// }
+
 int posix_interface_init(void)
 {
+    // struct sigaction saquit;
+    // saquit.sa_handler  = signal_handler_QUIT;
+    // saquit.sa_flags    = 0;
+    // saquit.sa_restorer = NULL;
+    // //sigaction(SIGINT, &saquit, NULL);
     return EXIT_SUCCESS;
 }
 

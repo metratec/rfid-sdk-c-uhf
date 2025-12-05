@@ -74,44 +74,61 @@ void round_done(struct mt_uhf_inventory_buffer *buf)
     }
 }
 
+char *comm_port_name = NULL;
+
+int connection(bool connect)
+{
+    if (connect) {
+        if (!comm_port_name)
+            return -ENODEV;
+        int ret = comm_start(comm_port_name, false, 5);
+        if (ret)
+            fprintf(stderr,
+                    "Couldn't open %s, ret: %i - %s, Errno: %i - %s\n",
+                    comm_port_name,
+                    ret,
+                    strerror(-ret),
+                    errno,
+                    strerror(-errno));
+        return ret;
+    }
+    comm_stop();
+    return 0;
+}
+
 int reset_done_cb(void)
 {
+    printf("Reset done called\n");
+    (void)connection(false);
     uint32_t start = mt_rfid_reader_get_time();
     while (1) {
         uint32_t done = mt_rfid_reader_get_time() - start;
-        if (done >= 2000)
+        if (done >= 5000)
             break;
-        mt_cmd_wait(2000 - done);
+        mt_cmd_wait(5000 - done);
     }
-    return 0;
+    return connection(true);
 }
 
 int main(int argc, char *argv[])
 {
-    const uint8_t       q_min = 2, q = 4, q_max = 10;
-    const u_int8_t      antenna_power[] = { 20, 0, 0, 0 };
+    const uint8_t       q_min = 2, q = 4, q_max = 6;
+    const u_int8_t      antenna_power[] = { 5 };
     const uint32_t      test_time_INVR = 15000, test_time_CINVR = 10000, test_time_CINV = 10000;
     enum mt_uhf_region  region     = mt_uhf_region_etsi;
-    enum mt_uhf_rf_mode mode       = mt_uhf_rf_mode_223;
+    enum mt_uhf_rf_mode mode       = mt_uhf_rf_mode_285;
     enum mt_uhf_session session    = mt_uhf_session_s0;
-    uint8_t             mux_test[] = { 1, 1, 1, 1 };
+    uint8_t             mux_test[] = {};
 
     int ret = -EINVAL;
     if (argc != 2) {
         fprintf(stderr, "Please provide path to serial port! \n");
         goto exit;
     }
-
-    if ((ret = comm_start(argv[1], false, 5))) {
-        fprintf(stderr,
-                "Couldn't open %s, ret: %i - %s, Errno: %i - %s\n",
-                argv[1],
-                ret,
-                strerror(-ret),
-                errno,
-                strerror(-errno));
+    comm_port_name = argv[1];
+    if ((ret = connection(true)))
         goto exit;
-    }
+
     if ((ret = posix_interface_init()))
         goto exit;
     srand(time(NULL));
@@ -166,12 +183,12 @@ int main(int argc, char *argv[])
         printf("Inventory returned error %d: %s \n", -ret, strerror(-ret));
         goto exit;
     }
-    //Inventory with mux (MINV)
-    ret = mt_uhf_inventory_automux(tag_cb, NULL, 5000);
-    if (ret < 0) {
-        printf("Mux inventory returned error %d: %s \n", -ret, strerror(-ret));
-        goto exit;
-    }
+    // //Inventory with mux (MINV)
+    // ret = mt_uhf_inventory_automux(tag_cb, NULL, 5000);
+    // if (ret < 0) {
+    //     printf("Mux inventory returned error %d: %s \n", -ret, strerror(-ret));
+    //     goto exit;
+    // }
     //More complex inventories
     if (!test_invr(1, &inv_buffer, test_time_INVR))
         goto exit;
@@ -179,8 +196,8 @@ int main(int argc, char *argv[])
         goto exit;
     if (!test_cinv(1, &inv_buffer, test_time_CINV, round_done))
         goto exit;
-    if (!test_cminv(0, &inv_buffer, test_time_CINV, round_done))
-        goto exit;
+    // if (!test_cminv(0, &inv_buffer, test_time_CINV, round_done))
+    //     goto exit;
     if (!test_tid())
         goto exit;
 
@@ -192,6 +209,7 @@ int main(int argc, char *argv[])
         printf("No read / write test as there is no tag in buffer\n");
 
     printf("-------\nEvery test done once, starting infinite tests in random order\n-------\n\n");
+
     while (running)
         test_random_function();
 

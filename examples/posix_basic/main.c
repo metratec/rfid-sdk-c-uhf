@@ -27,6 +27,18 @@ const enum mt_uhf_session session       = mt_uhf_session_s0;
 static bool _cb(struct mt_uhf_gen2_tag *tag);
 static int  _unknown_frame_cb(const char *frame_data);
 
+int reset_done_cb(void)
+{
+    uint32_t start = mt_rfid_reader_get_time();
+    while (1) {
+        uint32_t done = mt_rfid_reader_get_time() - start;
+        if (done >= 2000)
+            break;
+        mt_cmd_wait(2000 - done);
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     //Check parameter
@@ -57,10 +69,10 @@ int main(int argc, char *argv[])
         goto exit;
 
     //Init UHF lib
-    ret = mt_uhf_init(_unknown_frame_cb, comm_update, NULL);
+    ret = mt_uhf_init(_unknown_frame_cb, comm_update, NULL, reset_done_cb);
     if (ret == -EINVAL) {
         printf(
-            "Firmware version on device is deprecated, please update to Version %04d or higher!\n",
+            "Firmware version on device is deprecated, please update to Version %04u or higher!\n",
             MT_UHF_MINIMUM_FW);
         goto exit;
     } else if (ret) {

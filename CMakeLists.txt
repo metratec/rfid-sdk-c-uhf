@@ -15,7 +15,7 @@ if(NOT DEFINED CMAKE_BUILD_TYPE OR "${CMAKE_BUILD_TYPE}" STREQUAL "")
 endif()
 
 # Handle device setting
-set(SUPPORTED_DEVICES "PLRM" "PULSAR_LR" "QRG2" "DESKID_UHF_V2")
+set(SUPPORTED_DEVICES "PLRM" "QRG2_ETSI" "QRG2_FCC") # Untested devices: "PULSAR_LR" "DESKID_UHF_V2_ETSI" "DESKID_UHF_V2_FCC"
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 message(STATUS "MT_UHF_DEVICE_TYPE is '${MT_UHF_DEVICE_TYPE}'")
@@ -78,7 +78,7 @@ add_subdirectory(code)
 if(DEFINED EXAMPLE_POSIX_BASIC)
     if (EXAMPLE_POSIX_BASIC)
         add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/examples/posix_basic)
-endif()
+    endif()
 endif()
 
 if(DEFINED EXAMPLE_POSIX_TEST)

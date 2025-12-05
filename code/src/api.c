@@ -15,6 +15,9 @@
 //sdk needs to come first to include the settings
 #include <metratec/uhf_reader/intern/reader.h>
 
+#define TIMEOUT_DEFAULT            1000
+#define TIMEOUT_CONTINIOUS_DEFAULT 10000
+
 int mt_reader_heartbeat_set(uint8_t time, mt_uhf_data_cb_t cb)
 {
     if (time > 60 || (time && !cb))
@@ -40,27 +43,34 @@ int mt_uhf_data_cb_do_nothing(const char *prefix, char *data, bool finalized)
 }
 int mt_uhf_init(int (*unknown_frame)(const char *),
                 mt_uhf_poll_cb polling_cb,
-                void (*blocking_cb)(void))
+                void (*blocking_cb)(void),
+                int (*reset_done_cb)(void))
 {
     static uint8_t rx_buffer[MT_UHF_SETTING_RXBUFFER_SIZE];
     int            ret = at_rx_ring_init(rx_buffer, sizeof(rx_buffer));
     if (ret != EXIT_SUCCESS)
         return ret;
-    reader.unknown_frame_cb = unknown_frame;
-    reader.cmd.blocking_cb  = blocking_cb;
+    reader.unknown_frame_cb                  = unknown_frame;
+    reader.cmd.blocking_cb                   = blocking_cb;
+    reader.resp.default_timeout.base         = TIMEOUT_DEFAULT;
+    reader.resp.default_timeout.cinv_running = TIMEOUT_CONTINIOUS_DEFAULT;
     mt_uhf_set_polling(polling_cb);
     mt_uhf_framehandler_set_data_cb("+HBT", mt_uhf_data_cb_do_nothing);
     ret = mt_uhf_device_reset();
+    if (reset_done_cb)
+        reset_done_cb();
+
     if (ret) { //try again (unknown states like HBT etc)
         if (polling_cb) {
             while (polling_cb() > 0)
                 at_rx_ring_flush();
         } else
             at_rx_ring_flush();
-        ret = mt_uhf_device_reset(); //ignore the return value (unknown states like HBT etc)
-        if (ret)
-            return ret;
+        ret = mt_uhf_device_reset();
+        reset_done_cb();
     }
+    if (ret)
+        return ret;
     mt_uhf_boolx_t *echo = mt_uhf_reader_echo_get();
     if (!echo || *echo != mt_uhf_boolx_false) {
         if ((ret = mt_uhf_reader_echo_set(false)))
@@ -79,6 +89,13 @@ int mt_uhf_init(int (*unknown_frame)(const char *),
         return ret;
 
     return ret;
+}
+
+void mt_uhf_timeout_set(uint32_t timeout, uint32_t timeout_cinv)
+{
+    reader.resp.default_timeout.base         = timeout ? timeout : TIMEOUT_DEFAULT;
+    reader.resp.default_timeout.cinv_running = timeout_cinv ? timeout_cinv :
+                                                              TIMEOUT_CONTINIOUS_DEFAULT;
 }
 
 void mt_uhf_rx_reset(void)
@@ -133,24 +150,37 @@ int mt_uhf_set_q_value(uint8_t q_initial, uint8_t q_min, uint8_t q_max)
 
 int mt_uhf_set_power(const uint8_t *power, size_t num_of_antennas)
 {
-    if (!power || num_of_antennas == 0 || num_of_antennas > MAX_ANTENNAS_MUXED)
+    if (!power || num_of_antennas > MAX_ANTENNAS_MUXED)
         return -EINVAL; //invalid parameters
 
     //Build Cmd
     //Handling possible power value up to 999, with a comma it's 4 chars per additional antenna
-    char   cmd[16 + MAX_ANTENNAS_MUXED * 4]; //up to 4 bytes per antenna
-    size_t fill = 0;
-    for (int i = 0; i < num_of_antennas; i++) {
-        if (power[i] < MT_UHF_POWER_MIN || power[i] > MT_UHF_POWER_MAX)
+    char cmd[16 + MAX_ANTENNAS_MUXED * 4]; //up to 4 bytes per antenna
+    if (num_of_antennas == 1 && MAX_ANTENNAS_MUXED == 1)
+        num_of_antennas = 0; //use the "all" command instead
+    if (num_of_antennas) {
+        size_t fill = 0;
+        for (int i = 0; i < num_of_antennas; i++) {
+            if (power[i] < MT_UHF_POWER_MIN || power[i] > MT_UHF_POWER_MAX)
+                return -EINVAL;
+            size_t space = sizeof(cmd) - fill;
+            int    ret   = snprintf(cmd + fill, space, (i == 0) ? "AT+PWR=%u" : ",%u", power[i]);
+            if (ret < 0)
+                return ret;
+            if (ret >= space)
+                return -ENOBUFS;
+            fill += ret;
+        }
+    } else {
+        if (power[0] < MT_UHF_POWER_MIN || power[0] > MT_UHF_POWER_MAX)
             return -EINVAL;
-        size_t space = sizeof(cmd) - fill;
-        int    ret   = snprintf(cmd + fill, space, (i == 0) ? "AT+PWR=%u" : ",%u", power[i]);
+        int ret = snprintf(cmd, sizeof(cmd), "AT+PWR=%u", power[0]);
         if (ret < 0)
             return ret;
-        if (ret >= space)
+        if (ret >= sizeof(cmd))
             return -ENOBUFS;
-        fill += ret;
     }
+
     return mt_uhf_setter_call(cmd, 0);
 }
 
@@ -177,8 +207,10 @@ int mt_uhf_set_rf_mode(enum mt_uhf_region region, enum mt_uhf_rf_mode rf_mode)
         return -EINVAL;
     if (!mt_uhf_rf_mode_valid(rf_mode))
         return -EINVAL;
-    if (!(region & MT_DEVICE_VALID_REGIONS))
+    if (!(region & mt_uhf_region_all))
         return -EINVAL;
+    if (!(region & MT_DEVICE_VALID_REGIONS))
+        return -ENOTSUP;
     if (!mt_uhf_mode_matches_region(region, rf_mode))
         return -ENOTSUP;
 
@@ -476,10 +508,6 @@ int mt_uhf_set_inventory_mask(enum mt_uhf_mem_bank target,
         return -EINVAL;
     if (mask_len_bit && !mask)
         return -EINVAL;
-    // if (((mask_len_bit % 8) == 0) && ((mask_start_bit % 8) == 0)) {
-    //     //bytewise, we can use AT+MSK
-    //     //but why should we?
-    // }
     char cmd[128];
     int  ret = snprintf(cmd, sizeof(cmd), "AT+BMSK=%s", mt_uhf_get_membank_name(target));
     if (ret < 0)
@@ -492,14 +520,12 @@ int mt_uhf_set_inventory_mask(enum mt_uhf_mem_bank target,
         offset += ret;
         if (offset + 2 >= sizeof(cmd))
             return -EINVAL;
-        cmd[offset++] = ',';
-        size_t done   = 0;
-        while ((done * 8 < mask_len_bit) && offset + 2 < sizeof(cmd)) {
-            ret = snprintf(cmd + offset, sizeof(cmd) - offset, "%02X", mask[done++]);
-            if (ret != 2)
-                return ret < 0 ? ret : -ENOBUFS;
-            offset += ret;
-        }
+        cmd[offset++]         = ',';
+        size_t mask_len_bytes = (mask_len_bit + 7) / 8;
+        if (sizeof(cmd) - offset < mask_len_bytes + 3)
+            return -ENOBUFS;
+        mt_print_hex(mask, mask_len_bytes, cmd + offset);
+        offset += 2 * mask_len_bytes;
         ret = snprintf(cmd + offset, sizeof(cmd) - offset, ",%u", mask_len_bit);
         if (ret < 0)
             return ret;

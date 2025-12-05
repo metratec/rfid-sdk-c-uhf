@@ -14,6 +14,9 @@
 
 #include <metratec/uhf_reader_sdk.h>
 
+//from test_continious.c
+void test_random_function(void);
+
 bool test_masking(void);
 bool test_region_mode(enum mt_uhf_region region, enum mt_uhf_rf_mode mode);
 bool test_device_info(void);

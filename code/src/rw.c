@@ -77,25 +77,26 @@ static int _read_data_cb(const char *prefix, char *data, bool finalized)
         return EXIT_SUCCESS;
     }
 
-    char *epc   = data, *result, *read_data;
+    char *epc   = data;
     char *colon = strchr(epc, ',');
     if (!colon)
         return -EBADMSG;
-    size_t epc_len = colon - epc, read_data_len;
-    result         = colon + 1;
+    size_t epc_len = colon - epc;
+    char  *result  = colon + 1;
     colon          = strchr(result, ',');
-    if (!colon) { //no data after error code
-        read_data     = NULL;
-        read_data_len = 0;
-    } else {
-        *colon        = '\0';
-        read_data     = colon + 1;
-        read_data_len = strlen(read_data);
-    }
-    if (epc_len % 4 || read_data_len % 4)
+    if (colon)
+        *colon = '\0'; //make it a string for parsing function
+    //Without colon there is no data field (result should contain the error)
+    char  *read_data     = colon ? colon + 1 : NULL;
+    size_t read_data_len = colon ? strlen(read_data) : 0;
+
+    //Data parsed, check valid type
+    if (epc_len & 0x03 || read_data_len & 0x01)
         return -EBADMSG;
     if (!mt_parse_check_hex(epc, epc_len) || !mt_parse_check_hex(read_data, read_data_len))
         return -EBADMSG;
+
+    //Evaluate result string
     enum mt_uhf_rw_error_id result_id = mt_uhf_rw_get_error_id_from_name(result);
     if (result_id >= mt_uhf_rw_error_type_length)
         return -EBADMSG;
@@ -106,8 +107,9 @@ static int _read_data_cb(const char *prefix, char *data, bool finalized)
         return EXIT_SUCCESS;
     }
 
-    if (read_data_len != ud->answer_buffer->size * 2 || epc_len > MT_UHF_GEN2_MAX_EPC_BYTES * 2)
-        return -EBADMSG;
+    if (read_data_len > ud->answer_buffer[ud->fill].size * 2 ||
+        epc_len > MT_UHF_GEN2_MAX_EPC_BYTES * 2)
+        return -ENOBUFS;
 
     if (ud->fill < ud->size) {
         if (ud->epc_buffer) {
@@ -126,28 +128,56 @@ static int _read_data_cb(const char *prefix, char *data, bool finalized)
 int mt_uhf_read_data(enum mt_uhf_mem_bank      bank,
                      unsigned                  len,
                      unsigned                  offset,
-                     struct mt_uhf_buffer     *answer_buffer,
-                     struct mt_uhf_buffer_epc *epc_buffer,
-                     unsigned                  answer_buffer_count)
+                     struct mt_uhf_buffer     *answer_buffer_data,
+                     struct mt_uhf_buffer_epc *answer_buffer_epc,
+                     unsigned                  answer_buffer_count,
+                     struct mt_uhf_buffer_epc *mask,
+                     unsigned                 *error_count)
 {
-    if (answer_buffer == NULL || answer_buffer_count == 0 || len == 0 || len > 16)
+    if (answer_buffer_data == NULL || answer_buffer_count == 0 || len == 0 || len > 16)
+        return -EINVAL;
+    if (offset & 1)
         return -EINVAL;
     if (bank >= mt_uhf_mem_bank_length || bank == mt_uhf_mem_bank_OFF)
         return -EINVAL;
+    for (int i = 0; i < answer_buffer_count; i++) {
+        if (answer_buffer_data[i].size < len)
+            return -EINVAL;
+        answer_buffer_data[i].fill = 0;
+        if (answer_buffer_epc)
+            answer_buffer_epc[i].fill = 0;
+    }
+
     int  ret = EXIT_SUCCESS;
-    char cmd[32];
-    snprintf(cmd, sizeof(cmd), "AT+READ=%s,%u,%u", mt_uhf_get_membank_name(bank), offset, len);
+    char cmd[32 + 64];
+    ret =
+        snprintf(cmd, sizeof(cmd), "AT+READ=%s,%u,%u", mt_uhf_get_membank_name(bank), offset, len);
+    if (ret < 0)
+        return ret;
+
+    if (mask) {
+        size_t mask_len = min(mask->fill, 16);
+        if (sizeof(cmd) < ret + 2 * mask_len + 2)
+            return -ENOBUFS;
+        //add epc buffer
+        cmd[ret++] = ',';
+        mt_print_hex(mask->data, mask_len, cmd + ret);
+        ret += 2 * mask_len;
+    }
+    cmd[ret++] = '\0';
+
     struct rw_usr_data usr_data = {
-        .answer_buffer = answer_buffer,
-        .epc_buffer    = epc_buffer,
+        .answer_buffer = answer_buffer_data,
+        .epc_buffer    = answer_buffer_epc,
         .size          = answer_buffer_count,
         .fill          = 0,
         .error         = 0,
     };
-    answer_buffer->fill = 0;
-    ret                 = mt_uhf_get_data(cmd, _read_data_cb, &usr_data, 0);
+    ret = mt_uhf_get_data(cmd, _read_data_cb, &usr_data, 0);
     if (ret)
         return ret;
+    if (error_count)
+        *error_count = usr_data.error;
     return usr_data.fill;
 }
 
@@ -198,38 +228,53 @@ static int _write_data_cb(const char *prefix, char *data, bool finalized)
 }
 
 int mt_uhf_write_data(enum mt_uhf_mem_bank      bank,
-                      unsigned                  data_len,
-                      unsigned                  offset,
                       uint8_t                  *data,
-                      struct mt_uhf_buffer_epc *epc_buffer,
-                      unsigned                  buffer_count)
+                      unsigned                  data_len,
+                      uint32_t                  offset,
+                      struct mt_uhf_buffer_epc *answer_buffer_epc,
+                      unsigned                  answer_buffer_count,
+                      struct mt_uhf_buffer_epc *mask,
+                      unsigned                 *error_count)
 {
-    if (!data || !data_len || data_len & 1 || data_len > 16)
+    if (!data || data_len == 0 || data_len > 16 || data_len & 1 || offset & 1)
         return -EINVAL;
     if (bank >= mt_uhf_mem_bank_length || bank == mt_uhf_mem_bank_OFF)
         return -EINVAL;
-    char cmd[64];
+    if (answer_buffer_count && !answer_buffer_epc)
+        return -EINVAL;
+
+    char cmd[32 + 32 + 32]; //32 for command, 32 for data, 64 for mask
     int  ret = snprintf(cmd, sizeof(cmd), "AT+WRT=%s,%u,", mt_uhf_get_membank_name(bank), offset);
     if (ret < 0)
         return ret;
-    size_t fill = ret;
+    //Add data
     if (ret + 2 * data_len + 1 > sizeof(cmd))
         return -ENOBUFS;
-    for (unsigned i = 0; i < data_len; i += 2) {
-        ret = snprintf(cmd + fill, sizeof(cmd) - fill, "%02X%02X", data[i], data[i + 1]);
-        if (ret != 4)
-            return ret < 0 ? ret : -ENOBUFS;
-        fill += ret;
+    mt_print_hex(data, data_len, cmd + ret);
+    ret += 2 * data_len;
+
+    //Add mask if provided
+    if (mask && mask->fill) {
+        size_t mask_len = min(mask->fill, 16);
+        if (sizeof(cmd) < ret + 2 * mask_len + 2)
+            return -ENOBUFS;
+        cmd[ret++] = ',';
+        mt_print_hex(mask->data, mask_len, cmd + ret);
+        ret += 2 * mask_len;
     }
+    cmd[ret++] = '\0';
+
     struct rw_usr_data usr_data = {
         .answer_buffer = NULL,
-        .epc_buffer    = epc_buffer,
-        .size          = buffer_count,
+        .epc_buffer    = answer_buffer_epc,
+        .size          = answer_buffer_count,
         .fill          = 0,
         .error         = 0,
     };
     ret = mt_uhf_get_data(cmd, _write_data_cb, &usr_data, 0);
     if (ret)
         return ret;
+    if (error_count)
+        *error_count = usr_data.error;
     return usr_data.fill;
 }
