@@ -4,7 +4,7 @@ set(example_name "sample_posix_test_${MT_UHF_DEVICE_TYPE_UPPER}")
 add_executable(${example_name})
 
 target_precompile_headers(${example_name} PUBLIC ${mt_device_include_path})
-target_sources(${example_name} PUBLIC posix_serial.c posix_interface.c testing_functions.c ${MT_UHF_DEVICE_TYPE_UPPER}/main.c)
+target_sources(${example_name} PUBLIC posix_serial.c posix_interface.c testing_functions.c test_continious.c ${MT_UHF_DEVICE_TYPE_UPPER}/main.c)
 
 target_link_libraries(${example_name} PUBLIC mt_uhf_sdk_c)
 target_include_directories(${example_name} PUBLIC include)

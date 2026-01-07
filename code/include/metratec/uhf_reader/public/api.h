@@ -38,11 +38,20 @@
  * @param unknown_frame_cb  unknown_frame_cb for whenever a frame can't be parsed at all
  * @param mt_uhf_poll_cb    Callback called by the SDK to get more RX data (if set)
  * @param blocking_cb       Called by the SDK when in a blocking function and it can't do anything
+ * @param reset_done_cb     Called after a reset got triggered, this may need to handle reconnecting USB or waiting for boot up
  * @return                  POSIX Error Code
  */
 int mt_uhf_init(int (*unknown_frame_cb)(const char *),
                 mt_uhf_poll_cb polling_cb,
-                void (*blocking_cb)(void));
+                void (*blocking_cb)(void),
+                mt_uhf_poll_cb reset_done_cb);
+
+/**
+ * @brief               Sets the (default) timeouts used by the library
+ * @param timeout       Default timeout used for most commands
+ * @param timeout_cinv  Default timeout used in continious commands like CINV, CMINV ...
+ */
+void mt_uhf_timeout_set(uint32_t timeout, uint32_t timeout_cinv);
 
 /**
  * @brief   Reset the receiver state so after an error the next answer won't get rejected
@@ -78,7 +87,7 @@ int mt_reader_heartbeat_set(uint8_t time, mt_uhf_data_cb_t cb);
 /**
  * @brief Sets the output power per Antenna Port, trying to configure non-existing Ports will abort the command
  * @param[in] power pointer to an array of power values, one per Antenna to be configured
- * @param num_of_antennas Size of the given array
+ * @param num_of_antennas Number of antennas to set and therefore also the size of power. Allows also 0, implying to set for all antennas and power having one element
  * @return POSIX Error Code, -EINVAL if more Values than configured antennas were provided
  */
 int mt_uhf_set_power(const uint8_t *power, size_t num_of_antennas);

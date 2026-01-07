@@ -70,7 +70,7 @@ bool test_masking(void)
 bool test_region_mode(enum mt_uhf_region region, enum mt_uhf_rf_mode mode)
 {
     int ret;
-    //TODO: Add testing with invalid region, invalid mode, unmatched mode / region pain
+    //TODO: Add testing with invalid region, invalid mode, unmatched mode / region
     if ((ret = mt_uhf_set_rf_mode(region, mode))) {
         printf("Setting RF mode returned error %d: %s \n", -ret, strerror(-ret));
         return false;
@@ -81,7 +81,6 @@ bool test_region_mode(enum mt_uhf_region region, enum mt_uhf_rf_mode mode)
         printf("Getting RF mode returned error %d: %s \n", -ret, strerror(-ret));
         return false;
     }
-    printf("Region: %u - %s with mode %u\n", _region, mt_uhf_get_region_name(_region), _mode);
     if (_region != region) {
         printf("Unexpected region\n");
         return false;
@@ -143,12 +142,16 @@ bool test_session(enum mt_uhf_session session)
 
 bool test_mux_antenna(uint8_t *antennas, unsigned antenna_count)
 {
-    if (!antenna_count) {
-        printf("No antenna\n");
-        return false;
-    }
     int     ret;
     uint8_t _multiplex[16];
+    printf("Antenna count: %u\n", antenna_count);
+    if (!antenna_count) {
+        //No antenna, expect error answer leading to EFAULT error
+        if ((ret = mt_uhf_get_multiplex_antennas(_multiplex, ARRAY_SIZE(_multiplex))) == -EFAULT)
+            return true;
+        printf("Getting invalid multiplex returned error %d: %s\n", -ret, strerror(-ret));
+        return false;
+    }
     if ((ret = mt_uhf_get_multiplex_antennas(_multiplex, ARRAY_SIZE(_multiplex))) < 0) {
         printf("Getting invalid multiplex returned error %d: %s \n", -ret, strerror(-ret));
         return false;
@@ -179,8 +182,8 @@ bool test_mux_antenna(uint8_t *antennas, unsigned antenna_count)
     return true;
 }
 
-uint32_t hbt_test_last;
-int      _hbt_cb(const char *prefix, char *data, bool finalized)
+uint32_t   hbt_test_last;
+static int _hbt_cb(const char *prefix, char *data, bool finalized)
 {
     static uint32_t c = 0;
     if (data || !finalized)
@@ -394,7 +397,8 @@ bool test_rw_masked(struct mt_uhf_gen2_tag *tag)
     for (int i = 0; i < sizeof(wdata); i++)
         wdata[i] = tag->epc.data[i] ^ now;
 
-    int ret = 0;
+    int      ret         = 0;
+    unsigned error_count = 0;
     if (tag->epc.fill) {
         ret = mt_uhf_set_inventory_mask(mt_uhf_mem_bank_EPC, 0, tag->epc.data, tag->epc.fill * 8);
         if (ret < 0) {
@@ -411,29 +415,33 @@ bool test_rw_masked(struct mt_uhf_gen2_tag *tag)
         printf("Tag has neither EPC nor TID\n");
         return false;
     }
-    ret = mt_uhf_write_data(mt_uhf_mem_bank_USR, sizeof(wdata), 0, wdata, NULL, 0);
-    if (ret < 0) {
-        printf("Write error %d: %s \n", -ret, strerror(-ret));
+    struct mt_uhf_buffer_epc epc;
+    ret = mt_uhf_write_data(
+        mt_uhf_mem_bank_USR, wdata, sizeof(wdata), 0, &epc, 1, NULL, &error_count);
+    if (ret < 0 || error_count) {
+        printf("Write error %d: %s with %u tag errors\n", -ret, strerror(-ret), error_count);
         return false;
     }
     printf("Write found %i tags\n", ret);
-    if (ret) {
-        printf("Read USR data\n");
-        struct mt_uhf_buffer answer = { .data = rdata, .size = sizeof(rdata) };
+    if (ret == 0) {
+        printf("No readback triggered as write found no tag\n");
+        return true;
+    }
 
-        ret = mt_uhf_read_data(mt_uhf_mem_bank_USR, sizeof(rdata), 0, &answer, NULL, 1);
-        if (ret < 0) {
-            printf("Read error %d: %s \n", -ret, strerror(-ret));
-            return false;
-        }
-        printf("Read found %i tags\n", ret);
-        if (memcmp(rdata, wdata, sizeof(wdata))) {
-            printf("Read data missmatch\n");
-            return false;
-        }
-        printf("Readback matched\n");
-    } else
-        printf("No readback triggered as write failed\n");
+    printf("Read USR data\n");
+    struct mt_uhf_buffer answer = { .data = rdata, .size = sizeof(rdata) };
+    ret                         = mt_uhf_read_data(
+        mt_uhf_mem_bank_USR, sizeof(rdata), 0, &answer, NULL, 1, &epc, &error_count);
+    if (ret < 0 || error_count) {
+        printf("Read error %d: %s with %u tag errors\n", -ret, strerror(-ret), error_count);
+        return false;
+    }
+    printf("Read found %i tags\n", ret);
+    if (memcmp(rdata, wdata, sizeof(wdata))) {
+        printf("Read data missmatch\n");
+        return false;
+    }
+    printf("Readback matched\n");
     return true;
 }
 

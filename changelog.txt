@@ -1,5 +1,36 @@
 Changelog for metratec uhf-reader sdk for C
 
+0.5.0
+=====
+Release Date: 05.12.2025
+
+- QRG2 split into QRG2_FCC and QRG2_ETSI
+- Scope set: SDK targets module devices
+  - Pulsar_LR removed
+  - DESKID_UHF_V2 (split to DESKID_UHF_V2_ETSI and DESKID_UHF_V2_FCC) set to unsupported
+  - DwarfG2 and DwarfG2XR will be added in a future Release
+- Init function mt_uhf_init() API changes 
+  - now takes a reset done callback (can be NULL)
+- Added function mt_uhf_timeout_set to set timeouts (for example for many tags)
+- mt_uhf_read_data() API changed
+  - Added mask
+  - Added error count
+  - clearified use of EPC buffer
+- mt_uhf_write_data() API changed
+  - Added mask
+  - Added error count
+  - clearified use of EPC buffer
+  - moved data parameter
+- mt_uhf_set_power() now allows length 0 to set all antennas
+  - Fixed power set not working on devices without muxing (QRG2, DESKID)
+- Macro MT_DEVICE_TYPE_SET now is defined as the device name from the header (for debugging purposes)
+- PLRM is now set to support all regions
+- Performance improvement in hex command generation (e.g. mt_uhf_set_inventory_mask()) with by use of new function mt_print_hex()
+- Fixed issues with inventory buffering
+- Fixed continious inventory buffer having last antenna during new round (instead it's now zero, unknown)
+- Fixed continious inventory buffer found reset after round
+- Fixed issue with continious inventory round end detection on devices without muxing
+
 0.4.0
 =====
 Release Date: 04.11.2025

@@ -35,8 +35,29 @@ int at_rx_ring_init(void *buffer, size_t buffer_size)
 
 int mt_rfid_reader_rx(void *data, size_t data_len)
 {
-    if (data_len)
+    if (data_len) {
+#if DEBUG_PRINTOUT_PRINTF
+        bool newline = false;
+        printf(">> ");
+        char *d = data;
+        for (int i = 0; i < data_len; i++) {
+            if (newline)
+                printf("> ");
+            newline = false;
+            if (d[i] == '\r') {
+                printf("\\r\n");
+                newline = true;
+            } else if (d[i] == '\n') {
+                printf("\\n\n");
+                newline = true;
+            } else {
+                putchar(d[i]);
+            }
+        }
+        putchar('\n');
+#endif
         return at_rx_ring_push(data, data_len);
+    }
     return data_len;
 }
 
