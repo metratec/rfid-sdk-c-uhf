@@ -10,7 +10,14 @@
  * Proprietary and confidential                                                                    *
  */
 
-#pragma once
+#ifndef MT_UHF_SDK_CONFIG_H
+#define MT_UHF_SDK_CONFIG_H
+
+#if MT_UHF_MUX_MAX
+#define MAX_ANTENNAS_MUXED ((MT_UHF_MUX_MAX) * (MT_UHF_ANTENNA_COUNT))
+#else
+#define MAX_ANTENNAS_MUXED (MT_UHF_ANTENNA_COUNT)
+#endif
 
 //Buffer taking mt_rfid_reader_rx() data, one byte of them won't be used so only one byte less can be handled
 #ifndef MT_UHF_SETTING_RXBUFFER_SIZE
@@ -32,10 +39,6 @@ received without a command*/
 #warning Parser buffer can't be fully used as receive buffer isn't as big
 #endif
 
-// The amount of selects that can be chained in the select helper function
-// Set to 0 to disable the select helper feature
-#define MT_UHF_SELECT_HELPER_ARRAY_SIZE 6
-
 // Used for debug: if true uses printf to printout send and received frames
 #ifndef DEBUG_PRINTOUT_PRINTF
 #define DEBUG_PRINTOUT_PRINTF false
@@ -45,3 +48,5 @@ received without a command*/
 // This setting instructs the frame checking to ignore the seconds frame start
 // If disabled the checker function will return an error
 #define IGNORE_DOUBLE_FRAME_START true
+
+#endif //include guard

@@ -1,5 +1,12 @@
-//First get the posix settings
-#include <posix_interface.h>
+//C
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+//Interface
+#include <interface.h>
+#include <serial.h>
 
 //Metratec
 #include <metratec/uhf_reader/intern/reader.h>
@@ -7,17 +14,14 @@
 
 static bool test_at(void)
 {
-    int ret = mt_uhf_setter_call("AT", 0);
-    return ret == 0;
+    mt_uhf_errorcode_t ret = mt_uhf_setter_call("AT", 0);
+    return ret == mt_uhf_errorcode_success;
 }
 static bool test_identification(void)
 {
-    struct mt_uhf_reader_identification *id = mt_uhf_get_identification();
-    if (!id)
-        return false;
-    id->known_parts = 0;
-    id              = mt_uhf_get_identification();
-    if (!id)
+    struct mt_uhf_reader_identification id;
+    mt_uhf_errorcode_t                  ret = mt_uhf_get_identification(&id);
+    if (ret != mt_uhf_errorcode_success)
         return false;
     return true;
 }
@@ -33,14 +37,14 @@ static bool                   _tag_cb(struct mt_uhf_gen2_tag *tagp)
     }
     printf("Tag found, EPC: ");
     for (int i = 0; i < tagp->epc.fill; i++) {
-        if (i & 3 == 0)
+        if ((i & 3) == 0)
             putchar(' ');
         printf("%02X", tagp->epc.data[i]);
     }
     if (tagp->tid.fill) {
         printf(", TID:");
         for (int i = 0; i < tagp->tid.fill; i++) {
-            if (i & 3 == 0)
+            if ((i & 3) == 0)
                 putchar(' ');
             printf("%02X", tagp->tid.data[i]);
         }
@@ -58,12 +62,12 @@ static bool                   _tag_cb(struct mt_uhf_gen2_tag *tagp)
 
 static bool test_inv(void)
 {
-    int ret = mt_uhf_inventory(_tag_cb, NULL, 5000);
+    mt_uhf_errorcode_t ret = mt_uhf_inventory(_tag_cb, NULL, 5000);
     if (ret < 0)
-        printf("Inventory returned error %d: %s \n", -ret, strerror(-ret));
+        printf("Inventory returned error %d: %s \n", ret, mt_uhf_error2string(ret));
     printf("INV done: %i tags found\n", -1 * state);
     state = 0;
-    return (ret == 0);
+    return (ret == mt_uhf_errorcode_success);
 }
 static uint8_t rw_data[64];
 static uint8_t rw_data_init = 0;
@@ -76,23 +80,24 @@ static bool    _test_read(void)
         struct mt_uhf_buffer answer_buffer = { .fill = 0,
                                                .size = 8,
                                                .data = rw_data + rw_data_init };
-        int                  read_errors   = 0;
+        unsigned int         read_errors   = 0;
 
-        int ret = mt_uhf_read_data(mt_uhf_mem_bank_USR,
-                                   8,
-                                   rw_data_init,
-                                   &answer_buffer,
-                                   NULL,
-                                   1,
-                                   &test_tag.epc,
-                                   &read_errors);
+        mt_uhf_errorcode_t ret = mt_uhf_read_data(mt_uhf_mem_bank_USR,
+                                                  8,
+                                                  rw_data_init,
+                                                  &answer_buffer,
+                                                  NULL,
+                                                  1,
+                                                  &test_tag.epc,
+                                                  &read_errors,
+                                                  0);
 
         if (ret == 1 && read_errors == 0 && answer_buffer.fill == 8) {
             rw_data_init += 8;
             return true;
         }
-        if (ret < 0)
-            printf("Read returned error %d: %s \n", -ret, strerror(-ret));
+        if (ret < mt_uhf_errorcode_success)
+            printf("Read returned error %d: %s \n", ret, mt_uhf_error2string(ret));
         return false;
     }
     uint8_t data[16];
@@ -103,11 +108,13 @@ static bool    _test_read(void)
         len = max_len;
     struct mt_uhf_buffer answer_buffer = { .fill = 0, .size = sizeof(data), .data = data };
     unsigned             read_errors   = 0;
-    int                  ret           = mt_uhf_read_data(
-        mt_uhf_mem_bank_USR, len, offset, &answer_buffer, NULL, 1, &test_tag.epc, &read_errors);
-    if (ret < 0 || read_errors) {
-        printf(
-            "Read returned error %d: %s with %u read errors\n", -ret, strerror(-ret), read_errors);
+    mt_uhf_errorcode_t   ret           = mt_uhf_read_data(
+        mt_uhf_mem_bank_USR, len, offset, &answer_buffer, NULL, 1, &test_tag.epc, &read_errors, 0);
+    if (ret < mt_uhf_errorcode_success || read_errors) {
+        printf("Read returned error %d: %s with %u read errors\n",
+               ret,
+               mt_uhf_error2string(ret),
+               read_errors);
         return false;
     }
     if (ret == 0) {
@@ -137,31 +144,37 @@ static bool _test_write(void)
         len = max_len;
     for (int i = 0; i < len; i++)
         data[i] = rand() & 0xFF;
-    unsigned write_errors = 0;
-    int      ret          = mt_uhf_write_data(
-        mt_uhf_mem_bank_USR, data, len, offset, NULL, 0, &test_tag.epc, &write_errors);
-    if (ret < 0 || write_errors) {
-        printf(
-            "Write returned error %d: %s and %u tag errors\n", -ret, strerror(-ret), write_errors);
-        if (ret == -EINVAL) {
-            printf("Arguments: data: 0x%08lX, len: %i, %i, NULL, 0, &test_tag.epc\n",
-                   (size_t)data,
-                   len,
-                   offset);
+    unsigned           write_errors = 0;
+    mt_uhf_errorcode_t ret          = mt_uhf_write_data(
+        mt_uhf_mem_bank_USR, data, len, offset, NULL, 0, &test_tag.epc, &write_errors, 0);
+    if (ret < mt_uhf_errorcode_success || write_errors) {
+        printf("Write returned error %d: %s and %u tag errors\n",
+               ret,
+               mt_uhf_error2string(ret),
+               write_errors);
+        if (ret == mt_uhf_errorcode_invalid_parameter) {
+            printf("Arguments: data: %p, len: %i, %i, NULL, 0, &test_tag.epc\n", data, len, offset);
         } else {
             //got executed but failed, read data back
             do {
                 struct mt_uhf_buffer answer_buffer = { .fill = 0,
                                                        .size = sizeof(data),
                                                        .data = data };
-                int                  ret           = mt_uhf_read_data(
-                    mt_uhf_mem_bank_USR, len, offset, &answer_buffer, NULL, 1, &test_tag.epc, NULL);
+                ret                                = mt_uhf_read_data(mt_uhf_mem_bank_USR,
+                                       len,
+                                       offset,
+                                       &answer_buffer,
+                                       NULL,
+                                       1,
+                                       &test_tag.epc,
+                                       NULL,
+                                       0);
             } while (ret < 0);
             memcpy(rw_data + offset, data, len);
         }
         return false;
     }
-    if (ret == 0) {
+    if (ret == 0) { //amount of tags
         printf("Write failed to find the tag\n");
         return true;
     }
@@ -173,10 +186,10 @@ static bool _test_write(void)
                                            .size = sizeof(read_data),
                                            .data = read_data };
     ret                                = mt_uhf_read_data(
-        mt_uhf_mem_bank_USR, len, offset, &answer_buffer, NULL, 1, &test_tag.epc, NULL);
-    if (ret < 0) {
-        printf("Readback returned error %d: %s \n", -ret, strerror(-ret));
-        if (ret == -EINVAL) {
+        mt_uhf_mem_bank_USR, len, offset, &answer_buffer, NULL, 1, &test_tag.epc, NULL, 0);
+    if (ret < mt_uhf_errorcode_success) {
+        printf("Readback returned error %d: %s \n", ret, mt_uhf_error2string(ret));
+        if (ret == mt_uhf_errorcode_invalid_parameter) {
             printf("Arguments: len: %i, %i\n", len, offset);
         }
         return false;
@@ -200,11 +213,11 @@ static bool _test_write(void)
 
 static bool _test_echo(void)
 {
-    int echo = rand() % 2;
-    int ret  = mt_uhf_reader_echo_set(!!echo);
+    int                echo = rand() % 2;
+    mt_uhf_errorcode_t ret  = mt_uhf_reader_echo_set(!!echo);
     if (ret < 0)
-        printf("Echo returned error %d: %s \n", -ret, strerror(-ret));
-    return ret == 0;
+        printf("Echo returned error %d: %s \n", ret, mt_uhf_error2string(ret));
+    return ret == mt_uhf_errorcode_success;
 }
 
 typedef bool (*test_function_wrapper_t)(void);
@@ -233,7 +246,7 @@ void test_random_function(void)
             if (!ret) {
                 printf("Test %s failed at %s\n", tests[i].name, ctime(&ltime));
                 for (int j = 0; j < 100; j++) {
-                    comm_update();
+                    (void)comm_update();
                     mt_cmd_wait(10);
                 }
                 at_rx_ring_flush();

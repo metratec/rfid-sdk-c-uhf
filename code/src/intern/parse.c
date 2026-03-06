@@ -12,15 +12,15 @@
 
 #include <metratec/uhf_reader/intern/common.h>
 
-int mt_parse_int(const char *data, size_t data_len, int *result)
+mt_uhf_errorcode_t mt_parse_int(const char *data, size_t data_len, int *result)
 {
     if (!data || data_len == 0)
-        return -EINVAL;
+        return mt_uhf_errorcode_invalid_parameter;
     const char *parse = data;
     if (data[0] == '-' || data[0] == '+') {
         data_len--;
         if (data_len == 0)
-            return -EBADMSG;
+            return mt_uhf_errorcode_range;
         parse++;
     }
     bool negative = (data[0] == '-');
@@ -28,22 +28,22 @@ int mt_parse_int(const char *data, size_t data_len, int *result)
     for (size_t i = 0; i < data_len; i++) {
         uint8_t v = parse[i] - '0';
         if (v > 9)
-            return -EBADMSG; //Invalid Character
+            return mt_uhf_errorcode_range; //Invalid Character
         if (negative) {
             int min_value = (INT_MIN + v) / 10;
             if (value < min_value)
-                return -ERANGE;
+                return mt_uhf_errorcode_range;
             value = value * 10 - v;
         } else {
             int max_value = (INT_MAX - v) / 10;
             if (value > max_value)
-                return -ERANGE;
+                return mt_uhf_errorcode_range;
             value = value * 10 + v;
         }
     }
     if (result)
         *result = value;
-    return 0;
+    return mt_uhf_errorcode_success;
 }
 
 /**
@@ -64,20 +64,20 @@ static inline uint8_t _hex_char_2_bin(const char hex)
     return v;
 }
 
-int mt_parse_hex_array_to_bytes(const char *hex_array,
-                                size_t      hex_len,
-                                bool        check,
-                                uint8_t    *byte_array,
-                                size_t      byte_size)
+mt_uhf_errorcode_t mt_parse_hex_array_to_bytes(const char *hex_array,
+                                               size_t      hex_len,
+                                               bool        check,
+                                               uint8_t    *byte_array,
+                                               size_t      byte_size)
 {
     if (hex_len == 0)
-        return 0;
+        return mt_uhf_errorcode_success;
     if (!hex_array || hex_len & 1 || !byte_array)
-        return -EINVAL;
+        return mt_uhf_errorcode_invalid_parameter;
     if (byte_size < hex_len / 2)
-        return -ENOBUFS;
+        return mt_uhf_errorcode_invalid_parameter;
     if (check && !mt_parse_check_hex(hex_array, hex_len))
-        return -EBADMSG; //Invalid Character
+        return mt_uhf_errorcode_range; //Invalid Character
 
     uint8_t *target = byte_array;
     for (size_t i = 0; i < hex_len; i += 2) {
@@ -86,7 +86,7 @@ int mt_parse_hex_array_to_bytes(const char *hex_array,
         *target             = (high_nibble * 16) + low_nibble;
         target++;
     }
-    return 0;
+    return mt_uhf_errorcode_success;
 }
 
 bool mt_parse_check_hex(const char *data, unsigned data_len)

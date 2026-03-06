@@ -11,11 +11,11 @@ Public SDK to use Metratec UHF RFID-Readers from C code
 
 ## Building the library and example projects (for PLRM)
 
-- Call ```cmake -B build -S ./ -DCMAKE_BUILD_TYPE=Release -DMT_UHF_DEVICE_TYPE=PLRM -DEXAMPLE_POSIX_BASIC=1```
+- Call ```cmake -B build -S ./ -DCMAKE_BUILD_TYPE=Release -DMT_UHF_DEVICE_TYPE=PLRM```
 - Call ```make -C build/ mt_uhf_sdk_c``` to only build the library
   - Generated library file is build/code/libmt_uhf_sdk_c.a
-- Call ```make -C build/ sample_posix_basic_PLRM``` to build the basic example
-  - Generates executable POSIX into build/examples/posix_basic
+- Call ```make -C build/ sample_basic_inventory_PLRM``` to build the basic example
+  - Generates executable POSIX into build/examples/basic_inventory
 
 If you have a different device type change the value to match yours.
 
@@ -59,19 +59,19 @@ code/include/uhf_reader/hal.h
 - uint32_t mt_rfid_reader_get_time(void);
   - extern supplied (by the user)
   - needs to return a monoton time that should tick up by 1 per millisecond
-- int mt_rfid_reader_tx(const uint8_t *data, size_t data_len);
+- mt_uhf_errorcode_t mt_rfid_reader_tx(const uint8_t *data, size_t data_len);
   - extern supplied (by the user)
   - sending data, return the number of bytes sent (or negative value as error)
 - void mt_cmd_wait(uint32_t time_ms);
   - A waiting function
   - Used so polling mode won't take all the processor
   - if it returns earlier this won't be a problem, to the extreme of bare metal just returning
-- int mt_rfid_reader_rx(void *data, size_t data_len);
+- mt_uhf_errorcode_t mt_rfid_reader_rx(void *data, size_t data_len);
   - provided by the library
   - The function to put received data to
-- int mt_rfid_reader_rx_remaining_empty(void);
+- size_t mt_rfid_reader_rx_remaining_empty(void);
   - Gives the amount of data that can be pushed into mt_rfid_reader_rx()
-  - This allows the user to only need a bit of local stack buffer in the receiver
+  - This allows the user to only need a bit of local stack buffer in the receiver function
 
 ### Init
 
@@ -83,7 +83,7 @@ code/include/uhf_reader/hal.h
     from a different thread or ISR
   - blocking_cb is called if the SDK is in a blocking state so the user might do things during this periods
     especially if there is no polling_cb set
-- Call struct mt_uhf_reader_identification *id = mt_uhf_get_identification();
+- call ```mt_uhf_get_identification(...)```
   to get the information (like firmware revision) from the device
 - Use setting functions as needed, for example 
   - mt_uhf_set_multiplex_antennas()

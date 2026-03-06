@@ -1,5 +1,5 @@
-/*
- * File: deskid_uhf_v2.h                                                                           *
+/**
+ * @file: deskid_uhf_v2_etsi.h                                                                     *
  * Project: metratec-uhf-sdk-c                                                                     *
  * Created Date: 2025-04-16                                                                        *
  * Author: Martin Koehler / Nils Harder                                                            *
@@ -10,7 +10,8 @@
  * Proprietary and confidential                                                                    *
  */
 
-#pragma once
+#ifndef MT_UHF_SDK_DEVTYPE_DESKID_ETSI_H
+#define MT_UHF_SDK_DEVTYPE_DESKID_ETSI_H
 
 #ifdef MT_DEVICE_TYPE_SET
 #error "Multiple device type includes"
@@ -59,3 +60,5 @@
 #define MT_UHF_SELECT_DATA_MAX_LEN 18
 
 #define MT_UHF_RSSI_THRESHOLD_UNSUPPORTED
+
+#endif //include guard

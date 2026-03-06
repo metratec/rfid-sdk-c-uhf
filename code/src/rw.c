@@ -9,6 +9,8 @@
  * Unauthorized copying of this file, via any medium, is strictly prohibited.                      *
  * Proprietary and confidential                                                                    *
  */
+#include <stdio.h>
+#include <string.h>
 
 #include <metratec/uhf_reader_sdk.h>
 
@@ -59,172 +61,221 @@ struct rw_usr_data {
     struct mt_uhf_buffer     *answer_buffer;
     struct mt_uhf_buffer_epc *epc_buffer;
     unsigned                  size;
-    unsigned                  fill;
+    unsigned                  found_no_error;
     unsigned                  error;
 };
-static int _read_data_cb(const char *prefix, char *data, bool finalized)
+
+static mt_uhf_errorcode_t _read_data_cb(const char *prefix, char *data, bool finalized)
 {
+    //Input testing
     mt_rfid_reader_assert(data && prefix, "Missing data or prefix");
     mt_rfid_reader_assert(!strcmp(prefix_READ, prefix), "Wrong prefix");
-    struct rw_usr_data *ud = reader.cmd.usr_data;
-    mt_rfid_reader_assert(ud && ud->size && ud->answer_buffer, "No data");
+    struct rw_usr_data *target = reader.cmd.usr_data;
+    mt_rfid_reader_assert(target && target->size && target->answer_buffer, "No data");
+    if (!data || !prefix)
+        return mt_uhf_errorcode_format_fault;
 
-    if (!data)
-        return -EBADMSG;
+    //Test for no tags found case
     if (!strcmp(data, "<NO TAGS FOUND>")) {
-        mt_rfid_reader_assert(ud->fill == 0, "No tags found so fill should be zero");
-        mt_rfid_reader_assert(ud->error == 0, "No tags found so error should be zero");
-        return EXIT_SUCCESS;
+        mt_rfid_reader_assert(target->found_no_error == 0, "No tags found so fill should be zero");
+        mt_rfid_reader_assert(target->error == 0, "No tags found so error should be zero");
+        return mt_uhf_errorcode_success;
     }
 
+    //tag found, get answer elements
     char *epc   = data;
     char *colon = strchr(epc, ',');
     if (!colon)
-        return -EBADMSG;
-    size_t epc_len = colon - epc;
-    char  *result  = colon + 1;
-    colon          = strchr(result, ',');
+        return mt_uhf_errorcode_format_fault;
+    size_t epc_char_len = colon - epc;
+    char  *result       = colon + 1;
+    colon               = strchr(result, ',');
     if (colon)
         *colon = '\0'; //make it a string for parsing function
     //Without colon there is no data field (result should contain the error)
-    char  *read_data     = colon ? colon + 1 : NULL;
-    size_t read_data_len = colon ? strlen(read_data) : 0;
+    char  *read_data          = colon ? colon + 1 : NULL;
+    size_t read_data_char_len = colon ? strlen(read_data) : 0;
+    if (read_data && strchr(result, ','))
+        return mt_uhf_errorcode_format_fault;
 
     //Data parsed, check valid type
-    if (epc_len & 0x03 || read_data_len & 0x01)
-        return -EBADMSG;
-    if (!mt_parse_check_hex(epc, epc_len) || !mt_parse_check_hex(read_data, read_data_len))
-        return -EBADMSG;
 
-    //Evaluate result string
+    // Check EPC, needs to fit into buffer, is hex chars and a multiple of 4 of them as it consists of 16 bit words
+    size_t epc_byte_len = epc_char_len / 2;
+    if (epc_char_len % 4 || epc_byte_len > sizeof(target->epc_buffer->data))
+        return mt_uhf_errorcode_format_fault;
+    if (!mt_parse_check_hex(data, epc_char_len))
+        return mt_uhf_errorcode_format_fault;
+    //Check Data, needs to fit into buffer, is hex chars and multiple of 2 as its bytes (8 bits)
+    if (read_data_char_len % 2)
+        return mt_uhf_errorcode_format_fault;
+    size_t read_data_byte_len = read_data_char_len / 2;
+    if (read_data_byte_len > target->answer_buffer->size)
+        return mt_uhf_errorcode_memory_full;
+    if (!mt_parse_check_hex(read_data, read_data_char_len))
+        return mt_uhf_errorcode_format_fault;
+    //Check / evaluate result string
     enum mt_uhf_rw_error_id result_id = mt_uhf_rw_get_error_id_from_name(result);
-    if (result_id >= mt_uhf_rw_error_type_length)
-        return -EBADMSG;
+    if (result_id >= mt_uhf_rw_error_type_length) //unknown string
+        return mt_uhf_errorcode_format_fault;
+
     //everything is parsed or parsable, no data errors
     if (result_id != mt_uhf_rw_error_type_no_error) {
-        mt_rfid_reader_assert(read_data_len == 0, "If there is an error there should be no data");
-        ud->error++;
-        return EXIT_SUCCESS;
+        mt_rfid_reader_assert(read_data_char_len == 0,
+                              "If there is an error there should be no data");
+        target->error++;
+        return mt_uhf_errorcode_success; //read errors are valid
+    }
+    if (!read_data) //no error but also no data
+        return mt_uhf_errorcode_format_fault;
+
+    //Check space for data
+    if (target->found_no_error >= target->size) { //buffer full
+        target->found_no_error++;                 //One more tag found
+        return mt_uhf_errorcode_success;          //but no space left to save it
     }
 
-    if (read_data_len > ud->answer_buffer[ud->fill].size * 2 ||
-        epc_len > MT_UHF_GEN2_MAX_EPC_BYTES * 2)
-        return -ENOBUFS;
-
-    if (ud->fill < ud->size) {
-        if (ud->epc_buffer) {
-            struct mt_uhf_buffer_epc *e = ud->epc_buffer + ud->fill;
-            e->fill                     = epc_len / 2;
-            mt_parse_hex_array_to_bytes(epc, epc_len, false, e->data, e->fill);
-        }
-        struct mt_uhf_buffer *a = ud->answer_buffer;
-        a->fill                 = read_data_len / 2;
-        mt_parse_hex_array_to_bytes(read_data, read_data_len, false, a->data, a->fill);
+    //Space available
+    if (target->epc_buffer) { //epc is optional
+        struct mt_uhf_buffer_epc *e = target->epc_buffer + target->found_no_error;
+        e->fill                     = epc_byte_len;
+        mt_uhf_errorcode_t ret =
+            mt_parse_hex_array_to_bytes(epc, epc_char_len, false, e->data, epc_byte_len);
+        if (ret < mt_uhf_errorcode_success)
+            return ret;
     }
-    ud->fill++;
-    return EXIT_SUCCESS;
+    struct mt_uhf_buffer *a = target->answer_buffer + target->found_no_error;
+    a->fill                 = read_data_byte_len;
+    mt_uhf_errorcode_t ret  = mt_parse_hex_array_to_bytes(
+        read_data, read_data_char_len, false, a->data, read_data_byte_len);
+    if (ret < mt_uhf_errorcode_success)
+        return ret;
+    target->found_no_error++;
+    return mt_uhf_errorcode_success;
 }
 
-int mt_uhf_read_data(enum mt_uhf_mem_bank      bank,
-                     unsigned                  len,
-                     unsigned                  offset,
-                     struct mt_uhf_buffer     *answer_buffer_data,
-                     struct mt_uhf_buffer_epc *answer_buffer_epc,
-                     unsigned                  answer_buffer_count,
-                     struct mt_uhf_buffer_epc *mask,
-                     unsigned                 *error_count)
+mt_uhf_errorcode_t mt_uhf_read_data(enum mt_uhf_mem_bank      bank,
+                                    unsigned                  len,
+                                    unsigned                  offset,
+                                    struct mt_uhf_buffer     *answer_buffer_data,
+                                    struct mt_uhf_buffer_epc *answer_buffer_epc,
+                                    unsigned                  answer_buffer_count,
+                                    struct mt_uhf_buffer_epc *mask,
+                                    unsigned                 *error_count,
+                                    uint32_t                  timeout_ms)
 {
     if (answer_buffer_data == NULL || answer_buffer_count == 0 || len == 0 || len > 16)
-        return -EINVAL;
+        return mt_uhf_errorcode_invalid_parameter;
     if (offset & 1)
-        return -EINVAL;
+        return mt_uhf_errorcode_invalid_parameter;
     if (bank >= mt_uhf_mem_bank_length || bank == mt_uhf_mem_bank_OFF)
-        return -EINVAL;
+        return mt_uhf_errorcode_invalid_parameter;
     for (int i = 0; i < answer_buffer_count; i++) {
         if (answer_buffer_data[i].size < len)
-            return -EINVAL;
+            return mt_uhf_errorcode_invalid_parameter;
         answer_buffer_data[i].fill = 0;
         if (answer_buffer_epc)
             answer_buffer_epc[i].fill = 0;
     }
 
-    int  ret = EXIT_SUCCESS;
     char cmd[32 + 64];
-    ret =
+    int  retp =
         snprintf(cmd, sizeof(cmd), "AT+READ=%s,%u,%u", mt_uhf_get_membank_name(bank), offset, len);
-    if (ret < 0)
-        return ret;
-
+    if (retp >= sizeof(cmd))
+        return mt_uhf_errorcode_no_buffer;
+    if (retp < 0)
+        return mt_uhf_errorcode_general_fault;
     if (mask) {
         size_t mask_len = min(mask->fill, 16);
-        if (sizeof(cmd) < ret + 2 * mask_len + 2)
-            return -ENOBUFS;
+        if (sizeof(cmd) < retp + 2 * mask_len + 2)
+            return mt_uhf_errorcode_no_buffer;
         //add epc buffer
-        cmd[ret++] = ',';
-        mt_print_hex(mask->data, mask_len, cmd + ret);
-        ret += 2 * mask_len;
+        cmd[retp++] = ',';
+        mt_print_hex(mask->data, mask_len, cmd + retp);
+        retp += 2 * mask_len;
     }
-    cmd[ret++] = '\0';
+    cmd[retp++] = '\0';
 
     struct rw_usr_data usr_data = {
-        .answer_buffer = answer_buffer_data,
-        .epc_buffer    = answer_buffer_epc,
-        .size          = answer_buffer_count,
-        .fill          = 0,
-        .error         = 0,
+        .answer_buffer  = answer_buffer_data,
+        .epc_buffer     = answer_buffer_epc,
+        .size           = answer_buffer_count,
+        .found_no_error = 0,
+        .error          = 0,
     };
-    ret = mt_uhf_get_data(cmd, _read_data_cb, &usr_data, 0);
-    if (ret)
+    mt_uhf_errorcode_t ret = mt_uhf_get_data(cmd, _read_data_cb, &usr_data, 0);
+    if (ret < mt_uhf_errorcode_success)
         return ret;
     if (error_count)
         *error_count = usr_data.error;
-    return usr_data.fill;
+    return usr_data.found_no_error;
 }
 
 static int _write_data_cb(const char *prefix, char *data, bool finalized)
 {
+    //Input testing
     mt_rfid_reader_assert(data && prefix, "Missing data or prefix");
     mt_rfid_reader_assert(!strcmp(prefix_WRT, prefix), "Wrong prefix");
-    struct rw_usr_data *ud = reader.cmd.usr_data;
-    mt_rfid_reader_assert(ud && !ud->answer_buffer,
+    struct rw_usr_data *target = reader.cmd.usr_data;
+    mt_rfid_reader_assert(target && !target->answer_buffer,
                           "No user data or unexpected answer buffer in write");
-    mt_rfid_reader_assert(ud && (!ud->epc_buffer == !ud->size), "Size and pointer mismatch");
+    mt_rfid_reader_assert(target && (!target->epc_buffer == !target->size),
+                          "Size and pointer mismatch");
+    if (!data || !prefix)
+        return mt_uhf_errorcode_format_fault;
 
-    if (!data)
-        return -EBADMSG;
+    //Test for no tags found case
     if (!strcmp(data, "<NO TAGS FOUND>")) {
-        mt_rfid_reader_assert(ud->fill == 0, "No tags found so fill should be zero");
-        mt_rfid_reader_assert(ud->error == 0, "No tags found so error should be zero");
-        return EXIT_SUCCESS;
+        mt_rfid_reader_assert(target->found_no_error == 0, "No tags found so fill should be zero");
+        mt_rfid_reader_assert(target->error == 0, "No tags found so error should be zero");
+        return mt_uhf_errorcode_success;
     }
 
+    //tag found, get answer elements, EPC + Result
     char *epc   = data;
     char *colon = strchr(epc, ',');
     if (!colon)
-        return -EBADMSG;
-    size_t epc_len = colon - epc;
-    char  *result  = colon + 1;
+        return mt_uhf_errorcode_format_fault;
+    size_t epc_char_len = colon - epc;
+    char  *result       = colon + 1;
+    if (strchr(result, ','))
+        return mt_uhf_errorcode_format_fault;
 
-    if (epc_len % 4 || epc_len > MT_UHF_GEN2_MAX_EPC_BYTES * 2)
-        return -EBADMSG;
-    if (!mt_parse_check_hex(epc, epc_len))
-        return -EBADMSG;
+    // Check EPC, needs to fit into buffer, is hex chars and a multiple of 4 of them as it consists of 16 bit words
+    size_t epc_byte_len = epc_char_len / 2;
+    if (epc_char_len % 4 || epc_byte_len > sizeof(target->epc_buffer->data))
+        return mt_uhf_errorcode_format_fault;
+    if (!mt_parse_check_hex(data, epc_char_len))
+        return mt_uhf_errorcode_format_fault;
+
+    //Check / evaluate result string
     enum mt_uhf_rw_error_id result_id = mt_uhf_rw_get_error_id_from_name(result);
-    if (result_id >= mt_uhf_rw_error_type_length)
-        return -EBADMSG;
-    //everything is parsed or parsable, no data errors
+    if (result_id >= mt_uhf_rw_error_type_length) //unknown string
+        return mt_uhf_errorcode_format_fault;
 
+    //everything is parsed or parsable, no data errors
     if (result_id != mt_uhf_rw_error_type_no_error) {
-        ud->error++;
-        return EXIT_SUCCESS;
+        target->error++;
+        return mt_uhf_errorcode_success; //read errors are valid
     }
-    if (ud->fill < ud->size && ud->epc_buffer) {
-        struct mt_uhf_buffer_epc *e = ud->epc_buffer + ud->fill;
-        e->fill                     = epc_len / 2;
-        mt_parse_hex_array_to_bytes(epc, epc_len, false, e->data, e->fill);
+
+    //Check space for data
+    if (target->found_no_error >= target->size) { //buffer full
+        target->found_no_error++;                 //One more tag found
+        return mt_uhf_errorcode_success;          //but no space left to save it
     }
-    ud->fill++;
-    return EXIT_SUCCESS;
+
+    //Space available
+    if (target->epc_buffer) { //epc is optional
+        struct mt_uhf_buffer_epc *e = target->epc_buffer + target->found_no_error;
+        e->fill                     = epc_byte_len;
+        mt_uhf_errorcode_t ret =
+            mt_parse_hex_array_to_bytes(epc, epc_char_len, false, e->data, epc_byte_len);
+        if (ret < mt_uhf_errorcode_success)
+            return ret;
+    }
+    target->found_no_error++;
+    return mt_uhf_errorcode_success;
 }
 
 int mt_uhf_write_data(enum mt_uhf_mem_bank      bank,
@@ -234,47 +285,50 @@ int mt_uhf_write_data(enum mt_uhf_mem_bank      bank,
                       struct mt_uhf_buffer_epc *answer_buffer_epc,
                       unsigned                  answer_buffer_count,
                       struct mt_uhf_buffer_epc *mask,
-                      unsigned                 *error_count)
+                      unsigned                 *error_count,
+                      uint32_t                  timeout_ms)
 {
     if (!data || data_len == 0 || data_len > 16 || data_len & 1 || offset & 1)
-        return -EINVAL;
+        return mt_uhf_errorcode_invalid_parameter;
     if (bank >= mt_uhf_mem_bank_length || bank == mt_uhf_mem_bank_OFF)
-        return -EINVAL;
+        return mt_uhf_errorcode_invalid_parameter;
     if (answer_buffer_count && !answer_buffer_epc)
-        return -EINVAL;
+        return mt_uhf_errorcode_invalid_parameter;
 
     char cmd[32 + 32 + 32]; //32 for command, 32 for data, 64 for mask
-    int  ret = snprintf(cmd, sizeof(cmd), "AT+WRT=%s,%u,", mt_uhf_get_membank_name(bank), offset);
-    if (ret < 0)
-        return ret;
+    int  retp = snprintf(cmd, sizeof(cmd), "AT+WRT=%s,%u,", mt_uhf_get_membank_name(bank), offset);
+    if (retp >= sizeof(cmd))
+        return mt_uhf_errorcode_no_buffer;
+    if (retp < 0)
+        return mt_uhf_errorcode_general_fault;
     //Add data
-    if (ret + 2 * data_len + 1 > sizeof(cmd))
-        return -ENOBUFS;
-    mt_print_hex(data, data_len, cmd + ret);
-    ret += 2 * data_len;
+    if (retp + 2 * data_len + 1 > sizeof(cmd))
+        return mt_uhf_errorcode_no_buffer;
+    mt_print_hex(data, data_len, cmd + retp);
+    retp += 2 * data_len;
 
     //Add mask if provided
     if (mask && mask->fill) {
         size_t mask_len = min(mask->fill, 16);
-        if (sizeof(cmd) < ret + 2 * mask_len + 2)
-            return -ENOBUFS;
-        cmd[ret++] = ',';
-        mt_print_hex(mask->data, mask_len, cmd + ret);
-        ret += 2 * mask_len;
+        if (sizeof(cmd) < retp + 2 * mask_len + 2)
+            return mt_uhf_errorcode_no_buffer;
+        cmd[retp++] = ',';
+        mt_print_hex(mask->data, mask_len, cmd + retp);
+        retp += 2 * mask_len;
     }
-    cmd[ret++] = '\0';
+    cmd[retp++] = '\0';
 
     struct rw_usr_data usr_data = {
-        .answer_buffer = NULL,
-        .epc_buffer    = answer_buffer_epc,
-        .size          = answer_buffer_count,
-        .fill          = 0,
-        .error         = 0,
+        .answer_buffer  = NULL,
+        .epc_buffer     = answer_buffer_epc,
+        .size           = answer_buffer_count,
+        .found_no_error = 0,
+        .error          = 0,
     };
-    ret = mt_uhf_get_data(cmd, _write_data_cb, &usr_data, 0);
-    if (ret)
+    mt_uhf_errorcode_t ret = mt_uhf_get_data(cmd, _write_data_cb, &usr_data, timeout_ms);
+    if (ret < mt_uhf_errorcode_success)
         return ret;
     if (error_count)
         *error_count = usr_data.error;
-    return usr_data.fill;
+    return usr_data.found_no_error;
 }

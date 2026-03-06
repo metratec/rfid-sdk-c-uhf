@@ -9,7 +9,6 @@ else()
 endif()
 
 add_library(mt_uhf_sdk_c STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/select_helper.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/inventory.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rw.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/api.c
@@ -18,8 +17,10 @@ add_library(mt_uhf_sdk_c STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/intern/framehandler.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/intern/receive_buffer.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/intern/reader.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/intern/assert.c)
-target_precompile_headers(mt_uhf_sdk_c PUBLIC ${mt_device_include_path})
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/intern/assert.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/intern/errorcodes.c)
+
+target_precompile_headers(mt_uhf_sdk_c PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/metratec/uhf_reader/device_type/${MT_UHF_DEVICE_TYPE_LOWER}.h)
 
 target_compile_options(mt_uhf_sdk_c PUBLIC -g3)
 target_compile_features(mt_uhf_sdk_c PUBLIC c_std_99)

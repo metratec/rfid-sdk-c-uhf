@@ -10,34 +10,40 @@
  * Proprietary and confidential                                                                    *
  */
 
-#pragma once
+#ifndef MT_UHF_SDK_PUBLIC_RW_H
+#define MT_UHF_SDK_PUBLIC_RW_H
 
-//basics, including other basic includes
-#include "typedef.h"
+#include <metratec/uhf_reader/public/typedef.h>
 
 /**
  * @brief                       Read data from tag
+ * 
  * @param bank                  Bank to read the data from (usually mt_uhf_mem_bank_USR)
  * @param len                   Amount of data to read in bytes (up to 16)
  * @param offset                Start address in bank to read from (needs to be even)
- * @param answer_buffer_data    Pointer to one or multiple buffers to put the data
- * @param answer_buffer_count   Pointer to one or multiple buffers to put the epc of found data to (optional)
- * @param epc_buffer            Pointer to one EPC to use as a mask in READ command (up to 16 bytes will be used)
+ * @param answer_buffer_data    Pointer to one or multiple buffers to put the read data into
+ * @param answer_buffer_epc     Pointer to one or multiple buffers to put the EPC of found tags into (optional)
+ * @param answer_buffer_count   Number of buffers available in answer_buffer_data and answer_buffer_epc
+ * @param mask                  Pointer to one EPC to use as a mask in READ command (up to 16 bytes will be used), optional
  * @param error_count           Buffer to get number of times a tag reported with an error, only valid with return >= 0, optional
+ * @param timeout_ms            Timeout in milliseconds, use zero for default
  * 
- * @return                      >= 0: Number of successful reads (and therefore number of data available), < 0: POSIX Error Code
+ * @return                      >= 0: Number of successful reads (therefore the number of data available is min(ret,answer_buffer_count))
+ * @returns                      < 0: Error code
  */
-int mt_uhf_read_data(enum mt_uhf_mem_bank      bank,
-                     unsigned                  len,
-                     unsigned                  offset,
-                     struct mt_uhf_buffer     *answer_buffer_data,
-                     struct mt_uhf_buffer_epc *answer_buffer_epc,
-                     unsigned                  answer_buffer_count,
-                     struct mt_uhf_buffer_epc *mask,
-                     unsigned                 *error_count);
+mt_uhf_errorcode_t mt_uhf_read_data(enum mt_uhf_mem_bank      bank,
+                                    unsigned                  len,
+                                    unsigned                  offset,
+                                    struct mt_uhf_buffer     *answer_buffer_data,
+                                    struct mt_uhf_buffer_epc *answer_buffer_epc,
+                                    unsigned                  answer_buffer_count,
+                                    struct mt_uhf_buffer_epc *mask,
+                                    unsigned                 *error_count,
+                                    uint32_t                  timeout_ms);
 
 /**
  * @brief                       Writing data to a membank of a tag (found by EPC mask if available)
+ * 
  * @param bank                  The bank to write to (PC, EPC, USR, TID, RES), instead of RES write use password write , especially if only one is needed
  * @param data                  Buffer of data to write to the tag
  * @param data_len              Amount of data to write in bytes (up to 16)
@@ -46,16 +52,21 @@ int mt_uhf_read_data(enum mt_uhf_mem_bank      bank,
  * @param answer_buffer_count   The number of EPC buffers available
  * @param mask                  The EPC of the tag to look for (max 12 bytes are used), optional
  * @param error_count           Buffer to get number of times a tag reported with an error, only valid with return >= 0, optional
+ * @param timeout_ms            Timeout in milliseconds, use zero for default
  * 
- * @return                      >= 0: Number of successful writes, < 0: POSIX Error Code
+ * @return                      >= 0: Number of successful writes
+ * @returns                     < 0: Error code
  */
-int mt_uhf_write_data(enum mt_uhf_mem_bank      bank,
-                      uint8_t                  *data,
-                      unsigned                  data_len,
-                      uint32_t                  offset,
-                      struct mt_uhf_buffer_epc *answer_buffer_epc,
-                      unsigned                  answer_buffer_count,
-                      struct mt_uhf_buffer_epc *mask,
-                      unsigned                 *error_count);
+mt_uhf_errorcode_t mt_uhf_write_data(enum mt_uhf_mem_bank      bank,
+                                     uint8_t                  *data,
+                                     unsigned                  data_len,
+                                     uint32_t                  offset,
+                                     struct mt_uhf_buffer_epc *answer_buffer_epc,
+                                     unsigned                  answer_buffer_count,
+                                     struct mt_uhf_buffer_epc *mask,
+                                     unsigned                 *error_count,
+                                     uint32_t                  timeout_ms);
 
 //TODO: Add lock, unlock, permalock, kill
+
+#endif //include guard
