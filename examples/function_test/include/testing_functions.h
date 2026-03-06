@@ -10,7 +10,8 @@
  * Proprietary and confidential                                                                    *
  */
 
-#pragma once
+#ifndef MT_UHF_SDK_EXAMPLE_TEST_FUNCTIONS_H
+#define MT_UHF_SDK_EXAMPLE_TEST_FUNCTIONS_H
 
 #include <metratec/uhf_reader_sdk.h>
 
@@ -29,7 +30,7 @@ bool test_inputs();
 #endif
 
 bool test_session(enum mt_uhf_session session);
-bool test_mux_antenna(uint8_t *antennas, unsigned antenna_count);
+bool test_mux_antenna(const uint8_t *antennas, unsigned antenna_count);
 bool test_invr(unsigned hbt, struct mt_uhf_inventory_buffer *inv_buffer, unsigned test_time);
 bool test_cinvr(unsigned                        hbt_time,
                 struct mt_uhf_inventory_buffer *inv_buffer,
@@ -45,3 +46,5 @@ bool test_cminv(unsigned                        hbt_time,
                 void (*round_done_cb)(struct mt_uhf_inventory_buffer *buf));
 bool test_tid(void);
 bool test_rw_masked(struct mt_uhf_gen2_tag *tag);
+
+#endif //include guard

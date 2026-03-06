@@ -1,13 +1,12 @@
 cmake_minimum_required(VERSION 3.20.0)
 
-set(example_name "sample_posix_basic_${MT_UHF_DEVICE_TYPE_UPPER}")
+set(example_name "sample_basic_inventory_${MT_UHF_DEVICE_TYPE_UPPER}")
 add_executable(${example_name})
 
-target_precompile_headers(${example_name} PUBLIC ${mt_device_include_path})
-target_sources(${example_name} PUBLIC posix_serial.c posix_interface.c main.c)
+target_sources(${example_name} PUBLIC main.c)
 
+target_link_libraries(${example_name} PUBLIC posix_with_serial)
 target_link_libraries(${example_name} PUBLIC mt_uhf_sdk_c)
-target_include_directories(${example_name} PUBLIC include)
 
 set_property(TARGET ${example_name} PROPERTY C_STANDARD 99)
 target_compile_options(${example_name} PUBLIC -g3)

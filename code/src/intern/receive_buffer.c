@@ -9,8 +9,10 @@
  * Unauthorized copying of this file, via any medium, is strictly prohibited.                      *
  * Proprietary and confidential                                                                    *
  */
+#include <string.h>
 
 #include <metratec/uhf_reader/intern/receive_buffer.h>
+#include <metratec/uhf_reader/public/errorcodes.h>
 
 struct at_rx_ring_data {
     size_t   get;
@@ -23,53 +25,59 @@ struct at_rx_ring_data {
     bool   new_data;
 } _data;
 
-int at_rx_ring_init(void *buffer, size_t buffer_size)
+mt_uhf_errorcode_t at_rx_ring_init(void *buffer, size_t buffer_size)
 {
     if (!buffer || buffer_size < 64)
-        return -EINVAL;
+        return mt_uhf_errorcode_invalid_parameter;
     _data.buffer = buffer;
     _data.size   = buffer_size;
     at_rx_ring_flush();
-    return EXIT_SUCCESS;
+    return mt_uhf_errorcode_success;
 }
 
-int mt_rfid_reader_rx(void *data, size_t data_len)
+mt_uhf_errorcode_t mt_rfid_reader_rx(void *data, size_t data_len)
 {
-    if (data_len) {
+    if (data_len > mt_uhf_errorcode_success_max)
+        return mt_uhf_errorcode_invalid_parameter;
+    if (data_len == 0)
+        return mt_uhf_errorcode_success; // nothing to do
+
 #if DEBUG_PRINTOUT_PRINTF
-        bool newline = false;
-        printf(">> ");
-        char *d = data;
-        for (int i = 0; i < data_len; i++) {
-            if (newline)
-                printf("> ");
-            newline = false;
-            if (d[i] == '\r') {
-                printf("\\r\n");
-                newline = true;
-            } else if (d[i] == '\n') {
-                printf("\\n\n");
-                newline = true;
-            } else {
-                putchar(d[i]);
-            }
+    bool newline = false;
+    printf(">> ");
+    char *d = data;
+    for (int i = 0; i < data_len; i++) {
+        if (newline)
+            printf("> ");
+        newline = false;
+        if (d[i] == '\r') {
+            printf("\\r\n");
+            newline = true;
+        } else if (d[i] == '\n') {
+            printf("\\n\n");
+            newline = true;
+        } else {
+            printf("%c", d[i]);
         }
-        putchar('\n');
-#endif
-        return at_rx_ring_push(data, data_len);
     }
-    return data_len;
+    printf("\n");
+#endif
+
+    return at_rx_ring_push(data, data_len);
 }
 
-bool mt_rfid_reader_rx_new_data(void)
+bool at_rx_new_data(void)
 {
     bool new       = _data.new_data;
     _data.new_data = false;
     return new;
 }
 
-int mt_rfid_reader_rx_remaining_empty(void)
+size_t mt_rfid_reader_rx_remaining_empty(void)
 {
+    mt_rfid_reader_assert(_data.size >= _data.fill, "Fill overflow");
+    if (_data.fill > _data.size)
+        return 0;
     return _data.size - _data.fill;
 }
 
@@ -85,13 +93,16 @@ static inline size_t _rb_position_add(size_t pos, size_t add)
 size_t at_rx_ring_push(const uint8_t *data, size_t len)
 {
     mt_rfid_reader_assert(data || len == 0, "No data available");
+    if (!data || len == 0)
+        return 0;
+
     size_t space = mt_rfid_reader_rx_remaining_empty();
     mt_rfid_reader_assert(space <= _data.size && _data.fill <= _data.size,
                           "Invalid ring buffer state");
+    if (space == 0)
+        return 0;
 
-    len = min(len, space);
-    if (!len)
-        return len;
+    len            = min(len, space);
     _data.new_data = true;
 
     //space before wrap
@@ -117,12 +128,12 @@ void at_rx_ring_flush(void)
     _data.new_data                       = false;
 }
 
-int at_rx_ring_getframe(char *target, size_t max_len, bool delete_oversized_frames)
+mt_uhf_errorcode_t at_rx_ring_getframe(char *target, size_t max_len, bool delete_oversized_frames)
 {
     size_t frame_len = 0;
     while (1) {
         if (_data.fill == _data.delimiter_checked)
-            return -ENODATA;
+            return mt_uhf_errorcode_no_data_available;
         size_t current = _rb_position_add(_data.get, _data.delimiter_checked);
         if (_data.buffer[current] != mt_uhf_delimiter_char_frame_element) {
             _data.delimiter_checked++;
@@ -135,7 +146,8 @@ int at_rx_ring_getframe(char *target, size_t max_len, bool delete_oversized_fram
 
     //no follow up byte in buffer, so can't check the type. Element will be found again next try
     if (frame_len >= _data.fill)
-        return frame_len == _data.size ? -ENOBUFS : -ENODATA;
+        return frame_len == _data.size ? mt_uhf_errorcode_no_buffer :
+                                         mt_uhf_errorcode_no_data_available;
 
     size_t follow = _rb_position_add(_data.get, frame_len);
     if (_data.buffer[follow] == mt_uhf_delimiter_char_frame) //it's also a frame end
@@ -148,8 +160,10 @@ int at_rx_ring_getframe(char *target, size_t max_len, bool delete_oversized_fram
             _data.get = _rb_position_add(_data.get, frame_len);
         }
         // else don't remove frame, it's up the the owner
-        return -ENOBUFS;
+        return mt_uhf_errorcode_no_buffer;
     }
+    if (frame_len > mt_uhf_errorcode_success_max)
+        return mt_uhf_errorcode_general_fault;
 
     //push data on target
     //data before ring wrap

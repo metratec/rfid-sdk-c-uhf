@@ -10,10 +10,10 @@
  * Proprietary and confidential                                                                    *
  */
 
-#pragma once
+#ifndef MT_UHF_SDK_INTERN_FRAMEHANDLER_H
+#define MT_UHF_SDK_INTERN_FRAMEHANDLER_H
 
-#include "../public/typedef.h"
-#include "receive_buffer.h"
+#include <metratec/uhf_reader/intern/common.h>
 
 enum uhfv2_frametype {
     //needed if data is completely handled and the "current" was moved to "last"
@@ -34,31 +34,37 @@ struct uhfv2_frame {
 
 /**
  * @brief               Function to handle a frame
+ * 
  * @param data          The frame data
  * @param data_len      Length of frame data (bytes)
- * @return              0 if the frame was successfully handled
- *                      -return value of unknown_frame_cb
- *                      -BADMSG if the frame was faulty in any way
- *                      -EALREADY if the frame is done
- *                      -other negatives from sub functions
+ * 
+ * @return              mt_uhf_errorcode_success (0) if the frame was successfully handled
+ * @returns             Other error codes
  */
-int mt_uhf_framehandler(char *data, size_t data_len);
+mt_uhf_errorcode_t mt_uhf_framehandler(char *data, size_t data_len);
 
 /**
  * @brief           Searches for a frame callback by the prefix of the data element
+ * 
  * @param prefix    A string containing the prefix of the data
+ * 
  * @return          Pointer to the fitting element containing the needed callback
- *                  NULL of there is no fitting CB in the lookup data (or prefix is NULL)
+ * @returns         NULL of there is no fitting CB in the lookup data (or prefix is NULL)
  */
 struct mt_uhf_frame_data_cb_lookup *mt_uhf_framehandler_get_data_cb(const char *prefix);
 
 /**
  * @brief           Add a callback to the lookup table for mt_uhf_framehandler_get_data_cb()
  *                  If the prefix already exists it is overwritten
+ * 
  * @param prefix    The prefix that should trigger the callback
  * @param cb        The callback to call (NULL to remove the entry)
- * @return          0 if successful (maybe added or removed or already empty)
- *                  -NOBUFS if lookup table is already full
- *                  -EINVAL if there is no prefix
+ * 
+ * @return          mt_uhf_errorcode_success (0) on success
+ * @returns         mt_uhf_errorcode_no_buffer if lookup table is already full
+ * @returns         mt_uhf_errorcode_invalid_parameter if there is no prefix
  */
-int mt_uhf_framehandler_set_data_cb(const char *prefix, mt_uhf_data_cb_t cb);
+
+mt_uhf_errorcode_t mt_uhf_framehandler_set_data_cb(const char *prefix, mt_uhf_data_cb_t cb);
+
+#endif //include guard

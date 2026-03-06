@@ -9,24 +9,22 @@
  * Unauthorized copying of this file, via any medium, is strictly prohibited.                      *
  * Proprietary and confidential                                                                    *
  */
+#include <string.h>
 
-#include <metratec/uhf_reader_sdk.h>
+#include <metratec/uhf_reader/intern/common.h>
 
-//sdk needs to come first to include the settings
-#include <metratec/uhf_reader/intern/reader.h>
+static mt_uhf_errorcode_t _framehandler_dataframe(void);
 
-static int _framehandler_dataframe(void);
-
-int mt_uhf_current_frame_handled(void)
+mt_uhf_errorcode_t mt_uhf_current_frame_handled(void)
 {
     mt_rfid_reader_assert(reader.resp.frame.last.data == NULL, "Last frame data was not handled?");
 
     reader.resp.frame.last    = (struct uhfv2_frame){ reader.resp.frame.current.type, NULL };
     reader.resp.frame.current = (struct uhfv2_frame){ uhfv2_frametype_none, NULL };
-    return -EALREADY; //this is needed by calling functions to see the frame is already handled
+    return mt_uhf_errorcode_already; //this is needed by calling functions to see the frame is already handled
 }
 
-int mt_uhf_framehandler(char *data, size_t data_len)
+mt_uhf_errorcode_t mt_uhf_framehandler(char *data, size_t data_len)
 {
 #if DEBUG_PRINTOUT_PRINTF
     printf("Frame @%u:\n", mt_rfid_reader_get_time());
@@ -34,8 +32,8 @@ int mt_uhf_framehandler(char *data, size_t data_len)
         printf("CRLF\n");
     else {
         for (int i = 0; i < data_len; i++)
-            putchar(data[i]);
-        putchar('\n');
+            printf("%c", data[i]);
+        printf("\n");
     }
 #endif
     if (data_len < 2) //crlf OR +cr at least
@@ -66,9 +64,13 @@ int mt_uhf_framehandler(char *data, size_t data_len)
                 reader.resp.frame.current.type = uhfv2_frametype_answer_finish_failed;
             else
                 reader.resp.frame.current.type = uhfv2_frametype_data_finish;
-        } else if (reader.unknown_frame_cb)
-            return reader.unknown_frame_cb(data);
-        else
+        } else if (reader.unexpected_frame_cb) {
+            mt_uhf_errorcode_t ret = reader.unexpected_frame_cb(data);
+            if (ret == mt_uhf_errorcode_no_data_available)
+                goto invalid;
+            else
+                return ret;
+        } else
             goto invalid;
     }
     reader.resp.frame.current.data = data;
@@ -77,12 +79,12 @@ int mt_uhf_framehandler(char *data, size_t data_len)
     //data events are handled here, via callbacks
     case uhfv2_frametype_data_element:
     case uhfv2_frametype_data_finish: {
-        int ret = _framehandler_dataframe();
-        if (ret == 0)
+        mt_uhf_errorcode_t ret = _framehandler_dataframe();
+        if (ret == mt_uhf_errorcode_success)
             return mt_uhf_current_frame_handled();
-        else if (ret != -EALREADY) {
+        else if (ret != mt_uhf_errorcode_already) {
             reader.resp.frame.current.type = uhfv2_frametype_invalid;
-            mt_uhf_current_frame_handled();
+            (void)mt_uhf_current_frame_handled();
         }
         return ret;
     }
@@ -100,26 +102,26 @@ int mt_uhf_framehandler(char *data, size_t data_len)
             goto invalid;
         if (reader.resp.frame.last.type == uhfv2_frametype_data_element) //was incomplete
             goto invalid;
-        return 0;
+        return mt_uhf_errorcode_success;
     case uhfv2_frametype_echo:
         if (!reader.cmd.data) //no cmd, no echo
             goto invalid;
         if (reader.resp.frame.last.type != uhfv2_frametype_answer_start)
             goto invalid;
-        return 0;
+        return mt_uhf_errorcode_success;
 
     case uhfv2_frametype_answer_finish_success:
         if (!reader.cmd.data) //no cmd, no answer finish
             goto invalid;
         if (reader.resp.frame.last.type == uhfv2_frametype_data_element) //was incomplete
             goto invalid;
-        return 0;
+        return mt_uhf_errorcode_success;
     case uhfv2_frametype_answer_finish_failed:
         if (!reader.cmd.data) //no answer, no answer error
             goto invalid;
         if (reader.resp.frame.last.type == uhfv2_frametype_data_element) //was incomplete
             goto invalid;
-        return 0;
+        return mt_uhf_errorcode_success;
     default:
         goto invalid;
     }
@@ -128,15 +130,15 @@ invalid:
     reader.resp.frame.current.type = uhfv2_frametype_invalid;
     reader.resp.frame.current.data = NULL;
     (void)mt_uhf_current_frame_handled();
-    return -EBADMSG;
+    return mt_uhf_errorcode_format_fault;
 }
 
 /**
  * @brief       Function to handle the current data frame
- * @param       None
+ * 
  * @return      POSIX error codes
  */
-static int _framehandler_dataframe(void)
+static mt_uhf_errorcode_t _framehandler_dataframe(void)
 {
     struct uhfv2_frame *frame = &reader.resp.frame.current;
     mt_rfid_reader_assert(frame->type == uhfv2_frametype_data_element ||
@@ -144,7 +146,7 @@ static int _framehandler_dataframe(void)
                           "No data frame");
     size_t len = strlen(frame->data);
     if (len < 2)
-        return -EBADMSG;
+        return mt_uhf_errorcode_format_fault;
     char *prefix = frame->data;
     char *colon  = memchr(prefix, ':', len); //start of data
     char *data   = NULL;
@@ -161,7 +163,7 @@ static int _framehandler_dataframe(void)
         //if it was an unfinished data round check if the data id matches
         if (reader.resp.frame.last.type == uhfv2_frametype_data_element)
             if (reader.resp.frame.last_data_match != data_cb)
-                return -EBADSLT;
+                return mt_uhf_errorcode_inconsistent;
         //if it is an unfinished data round set data to check in next round
         if (frame->type == uhfv2_frametype_data_element)
             reader.resp.frame.last_data_match = data_cb;
@@ -169,9 +171,10 @@ static int _framehandler_dataframe(void)
             reader.resp.frame.last_data_match = NULL;
 
         if (!data_cb->cb)
-            return 0; //found a match, but it's just actively unhandled
-        int ret = data_cb->cb(prefix, data, frame->type == uhfv2_frametype_data_finish);
-        if (ret == 0)
+            return mt_uhf_errorcode_success; //found a match, but it's just actively unhandled
+        mt_uhf_errorcode_t ret =
+            data_cb->cb(prefix, data, frame->type == uhfv2_frametype_data_finish);
+        if (ret == mt_uhf_errorcode_success)
             return mt_uhf_current_frame_handled();
         return ret;
     }
@@ -179,7 +182,7 @@ static int _framehandler_dataframe(void)
     //no match
     if (reader.unknown_data_cb)
         return reader.unknown_data_cb(prefix, data, frame->type == uhfv2_frametype_data_finish);
-    return -ENOTSUP;
+    return mt_uhf_errorcode_range;
 }
 
 struct mt_uhf_frame_data_cb_lookup *mt_uhf_framehandler_get_data_cb(const char *prefix)
@@ -195,25 +198,25 @@ struct mt_uhf_frame_data_cb_lookup *mt_uhf_framehandler_get_data_cb(const char *
     return NULL;
 }
 
-int mt_uhf_framehandler_set_data_cb(const char *prefix, mt_uhf_data_cb_t cb)
+mt_uhf_errorcode_t mt_uhf_framehandler_set_data_cb(const char *prefix, mt_uhf_data_cb_t cb)
 {
     if (!prefix || !strlen(prefix))
-        return -EINVAL;
+        return mt_uhf_errorcode_invalid_parameter;
     struct mt_uhf_frame_data_cb_lookup *data_cb = mt_uhf_framehandler_get_data_cb(prefix);
     if (data_cb) {
         data_cb->cb = cb;
         if (!cb)
             data_cb->id = NULL;
-        return 0;
+        return mt_uhf_errorcode_success;
     }
     if (!cb)
-        return 0;
+        return mt_uhf_errorcode_success;
     for (int i = 0; i < ARRAY_SIZE(reader.data_cb); i++) {
         if (reader.data_cb[i].id)
             continue;
         reader.data_cb[i].id = prefix;
         reader.data_cb[i].cb = cb;
-        return 0;
+        return mt_uhf_errorcode_success;
     }
-    return -ENOBUFS;
+    return mt_uhf_errorcode_no_buffer;
 }

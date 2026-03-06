@@ -10,18 +10,20 @@
  * Proprietary and confidential                                                                    *
  */
 
-#pragma once
+#ifndef MT_UHF_SDK_INTERN_COMMON_H
+#define MT_UHF_SDK_INTERN_COMMON_H
 
-#include <errno.h>
-#include <limits.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+//For include abstraction in intern
 
-#include "assert.h"
-#include "parse.h"
+//First hal, including typedef, this includes config and type defining C headers
+#include <metratec/uhf_reader/hal.h>
+
+//Then implementations
+#include <metratec/uhf_reader/intern/assert.h>
+#include <metratec/uhf_reader/intern/framehandler.h>
+#include <metratec/uhf_reader/intern/parse.h>
+#include <metratec/uhf_reader/intern/reader.h>
+#include <metratec/uhf_reader/intern/receive_buffer.h>
 
 #ifndef min
 #define min(x, y) (((x) < (y)) ? (x) : (y))
@@ -33,3 +35,5 @@
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 #endif
+
+#endif //include guard

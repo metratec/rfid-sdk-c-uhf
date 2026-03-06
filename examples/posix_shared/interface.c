@@ -10,24 +10,62 @@
  * Proprietary and confidential                                                                    *
  */
 
-#include <posix_interface.h>
+#include <interface.h>
 
-volatile bool running = true;
+//C
+#include <errno.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
-int posix_interface_init(void)
+//POSIX
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <termios.h>
+#include <unistd.h>
+
+#include <sys/ioctl.h>
+#include <sys/time.h>
+#include <sys/types.h>
+
+#ifndef __USE_POSIX
+#warning No posix environment
+#endif
+
+volatile static sig_atomic_t abort_request = 0;
+static void                  abort_signal_handler(int signo)
 {
-    // struct sigaction saquit;
-    // saquit.sa_handler  = signal_handler_QUIT;
-    // saquit.sa_flags    = 0;
-    // saquit.sa_restorer = NULL;
-    // //sigaction(SIGINT, &saquit, NULL);
-    return EXIT_SUCCESS;
+    (void)signo;
+    fprintf(stderr, "Abort requested\n");
+    abort_request = 1;
+}
+int abort_init(void)
+{
+    struct sigaction sa = { 0 };
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = abort_signal_handler;
+
+    if (sigaction(SIGTERM, &sa, NULL) < 0)
+        return -1;
+    if (sigaction(SIGINT, &sa, NULL) < 0)
+        return -1;
+
+    return 0;
 }
 
-// void signal_handler_QUIT(int status)
-// {
-//     running = false;
-// }
+int interface_init(void)
+{
+    srand(time(NULL));
+    return abort_init();
+}
+
+bool abort_requested(void)
+{
+    return abort_request != 0;
+}
 
 void mt_rfid_reader_assert_log(char *message)
 {

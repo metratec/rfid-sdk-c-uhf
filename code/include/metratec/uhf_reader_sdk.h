@@ -8,6 +8,8 @@
  * Metratec GmbH - All Rights Reserved                                                             *
  * Unauthorized copying of this file, via any medium, is strictly prohibited.                      *
  * Proprietary and confidential                                                                    *
+ * 
+ * @brief: Main entry point, including is enough for most most use cases
  */
 
 /** @defgroup Entrypoint
@@ -19,10 +21,11 @@
  * - API contains the functions to use to interact with the reader
  */
 
-#pragma once
+#ifndef MT_UHF_SDK_BASE_H
+#define MT_UHF_SDK_BASE_H
 
 #ifdef __cplusplus
-extern "C" {
+#warning Compiled with C++ but C is expected
 #endif
 
 #include <stddef.h>
@@ -39,6 +42,4 @@ extern "C" {
 //Add Library functions
 #include <metratec/uhf_reader/public/api.h>
 
-#ifdef __cplusplus
-}
-#endif
+#endif //include guard

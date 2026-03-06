@@ -8,14 +8,44 @@
  * Metratec GmbH - All Rights Reserved                                                             *
  * Unauthorized copying of this file, via any medium, is strictly prohibited.                      *
  * Proprietary and confidential                                                                    *
+ *                                                                                                 *
+ * @brief Provides the needed types for the reader access, either by include of headers or directly
  */
 
-#pragma once
+#ifndef MT_UHF_SDK_PUBLIC_TYPEDEF_H
+#define MT_UHF_SDK_PUBLIC_TYPEDEF_H
 
+#include <limits.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
-#include "tag.h"
+//Config first
+#include <metratec/uhf_reader/config.h>
+
+//Then functions that may rely on config
+#include <metratec/uhf_reader/public/errorcodes.h>
+#include <metratec/uhf_reader/public/tag.h>
+
+/**
+ * @brief       A callback intended to be called when a frame is totally 
+ *              unexpected (no command running, no event type ('+' start))
+ * @details     The return value usually shall be mt_uhf_errorcode_no_data_available.
+ *              This will make the sdk handle the frame as invalid (just as if the
+ *              callback isn't set at all (NULL)).
+ *              Any other return values will make mt_uhf_framehandler() return it and
+ *              not handle the frame as invalid, therefor giving over handling to the user
+ * @warning     Returning anything but mt_uhf_errorcode_no_data_available might cause unexpected behaviour!
+ */
+typedef mt_uhf_errorcode_t (*mt_uhf_unexpected_frame_cb_t)(const char *);
+
+/**
+ * @brief       A callback intended to be called if the sdk is called blocking and there's no data to handle
+ * @details     This can be used to have a custom amount of waiting, to use events or
+ *              handle other code in pauses. It's up to the user to decide what's done but
+ *              it should not block too long as polling or handling on data is still needed to continue.
+ */
+typedef void (*mt_uhf_blocking_cb_t)(void);
 
 /** 
  * @brief Generic buffer type, line buffer, can be used to transfer data information into callbacks
@@ -24,6 +54,7 @@ struct mt_uhf_buffer {
     uint8_t *data;
     uint16_t fill, size;
 };
+
 /** 
  * @brief Like mt_uhf_buffer but with inherent buffer for the EPC and therefor no size needed
  */
@@ -31,6 +62,7 @@ struct mt_uhf_buffer_epc {
     uint8_t  data[MT_UHF_GEN2_MAX_EPC_BYTES];
     uint16_t fill;
 };
+
 /** 
  * @brief Like mt_uhf_buffer but with inherent buffer for the TID and therefor no size needed
  */
@@ -61,21 +93,34 @@ struct mt_uhf_gen2_tag {
 };
 
 /** 
- * @brief The fuction type for frame data elements 
- * (lines usually starting with a '+', prefix seperated from data by a colon)
+ * @brief           The fuction type for frame data elements
+ *  @note           (lines usually starting with a '+', prefix seperated from data by a colon)
+ * 
+ * @param prefix    A string with the prefix text as sometimes multiple prefixes may use the same callback
+ * @param data      The data part (after colon)
+ * @param finalized Informing if the packet is finished with LF or more lines are expected
+ * 
+ * @returns         mt_uhf_errorcode_success (0) on success
+ * @returns         Negatives for errors
  */
-typedef int (*mt_uhf_data_cb_t)(const char *prefix, char *data, bool finalized);
+typedef mt_uhf_errorcode_t (*mt_uhf_data_cb_t)(const char *prefix, char *data, bool finalized);
 
 /** 
  * @brief   The type of fuction to call when a tag is found. 
- *          Should accept call with NULL to represent end of round
+ * 
+ * @param   tag     Pointer to tag data, must accept call with NULL to represent end of round
+ * 
+ * @returns         Error code, zero if successful
  */
 typedef bool (*mt_uhf_tag_cb)(struct mt_uhf_gen2_tag *tag);
 
 /** 
- * @brief   The type to get called to fill up the rx buffer
+ * @brief           The type to get called to fill up the rx buffer, must be non blocking
+ * 
+ * @returns         Amount of data (>=0) on success
+ * @returns         Negatives for errors, mt_uhf_errorcode_no_data_available is not allowed, use 0 instead
  */
-typedef int (*mt_uhf_poll_cb)(void);
+typedef mt_uhf_errorcode_t (*mt_uhf_poll_cb_t)(void);
 
 /** 
  * @brief RF modes list, 0 is used as unknown to default to it 
@@ -164,33 +209,63 @@ enum mt_uhf_gen2_inventory_target {
 };
 
 /**
- * @brief A type for callbacks to give inventory data from one antenna over
+ * @brief   A type for callbacks to give inventory data from one antenna over
+ * @struct  mt_uhf_inventory_buffer
  */
 struct mt_uhf_inventory_buffer {
+    /**
+     * @brief   This structure contains informations about the tags
+     */
     struct {
-        uint16_t                size;
-        uint16_t                fill;
-        uint32_t                found;
-        struct mt_uhf_gen2_tag *buffer;
+        uint16_t size;  ///size of buffer in tags
+        uint16_t fill;  ///amount of tag buffer fill, <= found, <= size
+        uint32_t found; ///The amount of tags found. Tags get buffered as long as fill < size
+        struct mt_uhf_gen2_tag *buffer; ///A buffer to put tags into, space for <size> tags
     } tags;
-    uint8_t antenna; //will be 0 if unknown, for example in  INVR answer
+    uint8_t antenna; ///ID of the antenna finding the tags, will be 0 if unknown, e.g. in INVR answer
 };
 
+/** 
+ * @brief           The type to get called by contious inventory when a round is done
+ * 
+ * @param inv_buf   Gets a pointer to the buffer with the found data, this can be NULL (was provided by user at inventory call)
+ */
+typedef void (*cinv_round_done_cb_t)(struct mt_uhf_inventory_buffer *inv_buf);
+
 /**
- * @brief Containing the reader identification data like names, revision and serial number
+ * @brief   Containing the reader identification data like names, revision and serial number
+ * 
+ * @struct  mt_uhf_reader_identification
  */
 struct mt_uhf_reader_identification {
-    uint32_t known_parts; //5 bit used for the forset ID parts, can be increased in the future
+    char fw_name[32]; ///Name of reader firmware as a string with max length 32 (then it's no C string)
+    char fw_rev[5]; ///Firmware revision in the 4 char MKU format + '\0'
+    char hw_name[32]; ///Name of reader hardware as a string with max length 32 (then it's no C string)
+    char hw_rev[5];  ///Hardware revision in the 4 char MKU format + '\0'
+    char serial[17]; ///The reader device's serial number in 16 byte char MKU format + '\0'
+};
 
-    uint8_t fw_name[32];
-    uint8_t fw_rev[5];
-    uint8_t hw_name[32];
-    uint8_t hw_rev[5];
-    uint8_t serial[17];
+enum mt_uhf_reader_identification_known_parts {
+    mt_uhf_reader_identification_known_parts_none          = 0,
+    mt_uhf_reader_identification_known_parts_sw_name       = 0x01,
+    mt_uhf_reader_identification_known_parts_sw_rev        = 0x02,
+    mt_uhf_reader_identification_known_parts_hw_name       = 0x04,
+    mt_uhf_reader_identification_known_parts_hw_rev        = 0x08,
+    mt_uhf_reader_identification_known_parts_serial_number = 0x10,
+    //all firmware infos
+    mt_uhf_reader_identification_known_parts_sw = mt_uhf_reader_identification_known_parts_sw_name +
+                                                  mt_uhf_reader_identification_known_parts_sw_rev,
+    //all hardware infos
+    mt_uhf_reader_identification_known_parts_hw = mt_uhf_reader_identification_known_parts_hw_name +
+                                                  mt_uhf_reader_identification_known_parts_hw_rev,
+    //all expected data
+    mt_uhf_reader_identification_known_parts_all =
+        mt_uhf_reader_identification_known_parts_sw + mt_uhf_reader_identification_known_parts_hw +
+        mt_uhf_reader_identification_known_parts_serial_number
 };
 
 /**
- * @brief The target bank of read / write operations
+ * @brief   The target bank of read / write operations
  */
 enum mt_uhf_mem_bank {
     mt_uhf_mem_bank_EPC   = 0,
@@ -203,26 +278,4 @@ enum mt_uhf_mem_bank {
     mt_uhf_mem_bank_none = mt_uhf_mem_bank_length
 };
 
-/**
- * @brief Part of the selection
- */
-struct mt_uhf_select_element {
-    enum mt_uhf_mem_bank bank;
-    unsigned             target_address_bit;
-    uint8_t             *data;
-    unsigned             data_len_bit;
-};
-
-/**
- * @brief   Allows to describe a multi step selction
- *          target is not needed, it should always be B for 
- *          INV setting in select mode (and moving to be during select)
- */
-struct mt_uhf_select_data {
-    /** will switch session if reader is not correct already */
-    enum mt_uhf_session session;
-    /** A pointer to the elements */
-    struct mt_uhf_select_element *elements;
-    /** The number of elements in member elements */
-    unsigned select_element_count;
-};
+#endif //include guard

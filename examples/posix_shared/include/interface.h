@@ -10,33 +10,11 @@
  * Proprietary and confidential                                                                    *
  */
 
-#pragma once
-
-// #define __USE_POSIX
-// #define _POSIX_C_SOURCE 200809L
-// #define _POSIX_SOURCE   1 /* POSIX compliant source */
+#ifndef MT_UHF_SDK_EXAMPLE_TEST_POSIX_INTERFACE_H
+#define MT_UHF_SDK_EXAMPLE_TEST_POSIX_INTERFACE_H
 
 //C
-#include <errno.h>
-#include <signal.h>
 #include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-
-//POSIX
-#include <fcntl.h>
-#include <termios.h>
-#include <unistd.h>
-
-#include <sys/ioctl.h>
-#include <sys/time.h>
-#include <sys/types.h>
-
-//Posix serial
-#include <posix_serial.h>
 
 // Tools
 #ifndef min
@@ -49,5 +27,21 @@
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 #endif
 
-extern volatile bool running;
-int                  posix_interface_init(void);
+/**
+ * @brief   Initialize the interface
+ * @details Random and termination signal handler for example
+ * 
+ * @return  0 on success
+ * @returns -1 on fail
+ */
+int interface_init(void);
+
+/**
+ * @brief   Gives information if a termination request was catched
+ * @details If true the caller shall make a program stop
+ * 
+ * @return  True if requested, else false. State is not reset
+ */
+bool abort_requested(void);
+
+#endif //include guard

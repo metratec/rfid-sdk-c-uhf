@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 
 project(mt_uhf_sdk_c
     HOMEPAGE_URL "metratec.com"
-    VERSION "0.3.1"
+    VERSION "0.6"
     DESCRIPTION "Access to metratec's second generation UHF RFID readers in C"
     LANGUAGES C
 )
@@ -18,9 +18,9 @@ endif()
 set(SUPPORTED_DEVICES "PLRM" "QRG2_ETSI" "QRG2_FCC") # Untested devices: "PULSAR_LR" "DESKID_UHF_V2_ETSI" "DESKID_UHF_V2_FCC"
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-message(STATUS "MT_UHF_DEVICE_TYPE is '${MT_UHF_DEVICE_TYPE}'")
+set(MT_UHF_DEVICE_TYPE CACHE STRING "One of ${SUPPORTED_DEVICES}")
 
-if(DEFINED MT_UHF_DEVICE_TYPE)
+if(MT_UHF_DEVICE_TYPE)
     string(TOUPPER ${MT_UHF_DEVICE_TYPE} MT_UHF_DEVICE_TYPE_UPPER)
     string(TOLOWER ${MT_UHF_DEVICE_TYPE} MT_UHF_DEVICE_TYPE_LOWER)
 
@@ -35,54 +35,43 @@ endif()
 
 # handle library feature / buffer settings
 
-# A longer list needs memory and runtime, can be shortened if the last bytes are needed
-if(NOT MT_UHF_MAX_EVENT_TYPES)
-    set(MT_UHF_MAX_EVENT_TYPES 10)
+set(MT_UHF_MAX_EVENT_TYPES 10
+    CACHE STRING "A longer list needs memory and runtime, can be shortened if the last bytes are needed")
+
+set(MT_UHF_USE_ASSERT OFF
+    CACHE BOOL "Use the internal assert function so the user needs to supply a handler")
+if(MT_UHF_USE_ASSERT)
+    add_compile_definitions(MT_UHF_USE_ASSERT=1)
 endif()
 
-# Use the internal assert function so the user needs to supply a handler
-if(NOT MT_UHF_USE_ASSERT)
-    set(MT_UHF_USE_ASSERT 0)
-endif()
+set(MT_UHF_SETTING_RXBUFFER_SIZE 1024
+    CACHE STRING "Memory size of the response buffer")
 
-# Memory size of the response buffer
-if(NOT MT_UHF_SETTING_RXBUFFER_SIZE)
-    set(MT_UHF_SETTING_RXBUFFER_SIZE 1024)
-endif()
-
-# Buffer size for a single answer line
-if(NOT MT_UHF_PARSER_BUF_SIZE)
-    set(MT_UHF_PARSER_BUF_SIZE 256)
-endif()
+set(MT_UHF_PARSER_BUF_SIZE 256
+    CACHE STRING "Buffer size for a single answer line")
 
 if(${MT_UHF_PARSER_BUF_SIZE} GREATER_EQUAL ${MT_UHF_SETTING_RXBUFFER_SIZE})
     message(WARNING "Parser buffer can't be fully used as receive buffer isn't as big")
 endif()
 
+# FIXME: You would usually use configure_file() to generate a config.h.
 add_compile_definitions(MT_UHF_SETTING_RXBUFFER_SIZE=${MT_UHF_SETTING_RXBUFFER_SIZE}
     MT_UHF_MAX_EVENT_TYPES=${MT_UHF_MAX_EVENT_TYPES}
     MT_UHF_PARSER_BUF_SIZE=${MT_UHF_PARSER_BUF_SIZE}
-    MT_UHF_USE_ASSERT=${MT_UHF_USE_ASSERT}
 )
 
-if(DEFINED _DEBUG_PRINTOUT_PRINTF)
-    add_compile_definitions(DEBUG_PRINTOUT_PRINTF=${_DEBUG_PRINTOUT_PRINTF})
+set(_DEBUG_PRINTOUT_PRINTF OFF
+    CACHE BOOL "Enable some additional debug logging to stdout")
+if(_DEBUG_PRINTOUT_PRINTF)
+    add_compile_definitions(DEBUG_PRINTOUT_PRINTF=1)
 endif()
 
 # Library
-set(mt_device_include_path ${CMAKE_CURRENT_SOURCE_DIR}/code/include/metratec/uhf_reader/device_type/${MT_UHF_DEVICE_TYPE_LOWER}.h)
-set(mt_device_include_path ${CMAKE_CURRENT_SOURCE_DIR}/code/include/metratec/uhf_reader/device_type/${MT_UHF_DEVICE_TYPE_LOWER}.h PARENT_SCOPE)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/code/include)
 add_subdirectory(code)
 
-if(DEFINED EXAMPLE_POSIX_BASIC)
-    if (EXAMPLE_POSIX_BASIC)
-        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/examples/posix_basic)
-    endif()
-endif()
+# Examples
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/examples/posix_shared)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/examples/basic_inventory)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/examples/function_test)
 
-if(DEFINED EXAMPLE_POSIX_TEST)
-    if(EXAMPLE_POSIX_TEST)
-        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/examples/posix_test)
-    endif()
-endif()

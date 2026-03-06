@@ -9,6 +9,8 @@
  * Unauthorized copying of this file, via any medium, is strictly prohibited.                      *
  * Proprietary and confidential                                                                    *
  */
+#include <stdio.h>
+#include <string.h>
 
 #include <metratec/uhf_reader_sdk.h>
 
@@ -23,71 +25,86 @@ DEFINE_PREFIX(MINV);
 DEFINE_PREFIX(CMINV);
 DEFINE_PREFIX(TID);
 
-static inline void _buffer_tag(struct mt_uhf_inventory_buffer *inv_buffer);
-static int         _parse_inv_data_info(char *data, size_t len);
-static int         _parse_inv_data_tag(char *data, struct mt_uhf_gen2_tag *tag, bool reported);
-static int         _inventory_inv_data_cb(const char *prefix, char *data, bool finalized);
-static int         _inventory_invr_data_cb(const char *prefix, char *data, bool finalized);
+static inline void        _buffer_tag(struct mt_uhf_inventory_buffer *inv_buffer);
+static mt_uhf_errorcode_t _parse_inv_data_info(char *data, size_t len);
+static mt_uhf_errorcode_t _inventory_inv_data_cb(const char *prefix, char *data, bool finalized);
+static mt_uhf_errorcode_t _inventory_invr_data_cb(const char *prefix, char *data, bool finalized);
+static mt_uhf_errorcode_t _parse_inv_data_tag(char                   *data,
+                                              struct mt_uhf_gen2_tag *tag,
+                                              bool                    reported);
 
-int mt_uhf_inventory_stop(uint32_t timeout_ms)
+mt_uhf_errorcode_t mt_uhf_inventory_stop(uint32_t timeout_ms)
 {
     char                                cmd[32];
     struct mt_uhf_frame_data_cb_lookup *lu;
+    int                                 retp;
     if ((lu = mt_uhf_framehandler_get_data_cb(prefix_CINV)) && lu->cb)
-        snprintf(cmd, sizeof(cmd), "AT+BINV");
+        retp = snprintf(cmd, sizeof(cmd), "AT+BINV");
     else if ((lu = mt_uhf_framehandler_get_data_cb(prefix_CINVR)) && lu->cb)
-        snprintf(cmd, sizeof(cmd), "AT+BINVR");
+        retp = snprintf(cmd, sizeof(cmd), "AT+BINVR");
     else if ((lu = mt_uhf_framehandler_get_data_cb(prefix_CMINV)) && lu->cb)
-        snprintf(cmd, sizeof(cmd), "AT+BMINV");
+        retp = snprintf(cmd, sizeof(cmd), "AT+BMINV");
     else
-        return -ENAVAIL;
+        return mt_uhf_errorcode_not_available;
 
-    int ret = mt_uhf_setter_call(cmd, timeout_ms);
-    if (ret == EXIT_SUCCESS) {
+    if (retp >= sizeof(cmd))
+        return mt_uhf_errorcode_no_buffer;
+    if (retp < 0)
+        return mt_uhf_errorcode_general_fault;
+
+    mt_uhf_errorcode_t ret = mt_uhf_setter_call(cmd, timeout_ms);
+    if (ret == mt_uhf_errorcode_success) {
         reader.resp.running_cinv = false;
         lu->cb                   = NULL;
     }
     return ret;
 }
 
-int mt_uhf_inventory(mt_uhf_tag_cb cb, struct mt_uhf_inventory_buffer *buffer, uint32_t timeout_ms)
+mt_uhf_errorcode_t mt_uhf_inventory(mt_uhf_tag_cb                   cb,
+                                    struct mt_uhf_inventory_buffer *buffer,
+                                    uint32_t                        timeout_ms)
 {
     if (reader.state.inv_format == uhfv2_inventory_tag_data_format_unknown)
-        return -ENAVAIL;
+        return mt_uhf_errorcode_not_available;
     if (buffer) {
         buffer->tags.fill  = 0;
         buffer->tags.found = 0;
         buffer->antenna    = 0;
     }
 
-    reader.tag.cb = cb;
-    int ret       = mt_uhf_get_data("AT+INV", _inventory_inv_data_cb, buffer, timeout_ms);
-    reader.tag.cb = NULL;
+    reader.tag.cb          = cb;
+    mt_uhf_errorcode_t ret = mt_uhf_get_data("AT+INV", _inventory_inv_data_cb, buffer, timeout_ms);
+    reader.tag.cb          = NULL;
     return ret;
 }
-int mt_uhf_inventory_automux(mt_uhf_tag_cb                   cb,
-                             struct mt_uhf_inventory_buffer *buffer,
-                             uint32_t                        timeout_ms)
+mt_uhf_errorcode_t mt_uhf_inventory_automux(mt_uhf_tag_cb                   cb,
+                                            struct mt_uhf_inventory_buffer *buffer,
+                                            uint32_t                        timeout_ms)
 {
     if (reader.state.inv_format == uhfv2_inventory_tag_data_format_unknown)
-        return -ENAVAIL;
+        return mt_uhf_errorcode_not_available;
     if (buffer) {
         buffer->tags.fill  = 0;
         buffer->tags.found = 0;
         buffer->antenna    = 0;
     }
 
-    reader.tag.cb = cb;
-    int ret       = mt_uhf_get_data("AT+MINV", _inventory_inv_data_cb, buffer, timeout_ms);
-    reader.tag.cb = NULL;
+    reader.tag.cb          = cb;
+    mt_uhf_errorcode_t ret = mt_uhf_get_data("AT+MINV", _inventory_inv_data_cb, buffer, timeout_ms);
+    reader.tag.cb          = NULL;
     return ret;
 }
+
+/**
+ * @brief A data structure to handle data read by AT+TID / mt_uhf_inventory_read_tid()
+ */
 struct tid_usr_data {
     struct mt_uhf_buffer_tid *buffer;
     uint32_t                  size;
-    uint32_t                  fill;
+    uint32_t                  found;
 };
-static int _inventory_read_tid_cb(const char *prefix, char *data, bool finalized)
+
+static mt_uhf_errorcode_t _inventory_read_tid_cb(const char *prefix, char *data, bool finalized)
 {
     mt_rfid_reader_assert(data && prefix, "Missing data or prefix");
     mt_rfid_reader_assert(!strcmp(prefix_TID, prefix), "Wrong prefix");
@@ -95,38 +112,48 @@ static int _inventory_read_tid_cb(const char *prefix, char *data, bool finalized
     mt_rfid_reader_assert(target && target->size && target->buffer, "No TID user data");
 
     if (!data)
-        return -EBADMSG;
+        return mt_uhf_errorcode_format_fault;
     if (!strcmp(data, "<NO TAGS FOUND>")) {
-        mt_rfid_reader_assert(target->fill == 0, "There should be no tags");
-        return EXIT_SUCCESS;
+        mt_rfid_reader_assert(target->found == 0, "There should be no tags");
+        return mt_uhf_errorcode_success;
     }
-    size_t tid_len = strlen(data);
-    //TID consists of multiples of 2 bytes -> 4 chars
-    if (tid_len % 4 || tid_len / 2 > sizeof(target->buffer->data))
-        return -EBADMSG;
-    int ret = EXIT_SUCCESS;
-    if (target->fill < target->size) {
-        struct mt_uhf_buffer_tid *tid = &target->buffer[target->fill];
-        ret       = mt_parse_hex_array_to_bytes(data, tid_len, true, tid->data, sizeof(tid->data));
-        tid->fill = MT_UHF_GEN2_MAX_TID_BYTES;
+
+    // Check TID, needs to fit into buffer, is hex chars and a multiple of 4 of them as it consists of 16 bit words
+    size_t tid_char_len = strlen(data);
+    size_t tid_byte_len = tid_char_len / 2;
+    if (tid_char_len % 4 || tid_byte_len > sizeof(target->buffer->data))
+        return mt_uhf_errorcode_format_fault;
+    if (!mt_parse_check_hex(data, tid_char_len))
+        return mt_uhf_errorcode_format_fault;
+
+    if (target->found >= target->size) { //buffer full
+        target->found++;                 //One more TID parsed
+        return mt_uhf_errorcode_success;
     }
-    target->fill++;
-    return ret;
-    //TID parsed
+
+    struct mt_uhf_buffer_tid *tid = &target->buffer[target->found];
+    mt_uhf_errorcode_t        ret =
+        mt_parse_hex_array_to_bytes(data, tid_char_len, true, tid->data, sizeof(tid->data));
+    if (ret < mt_uhf_errorcode_success)
+        return ret;
+    tid->fill = tid_byte_len;
+    target->found++; //One more TID parsed
+    return mt_uhf_errorcode_success;
 }
 
-int mt_uhf_inventory_read_tid(struct mt_uhf_buffer_tid TIDs[],
-                              uint32_t                 tid_size,
-                              uint32_t                 timeout_ms)
+mt_uhf_errorcode_t mt_uhf_inventory_read_tid(struct mt_uhf_buffer_tid *TIDs,
+                                             uint32_t                  tid_size,
+                                             uint32_t                  timeout_ms)
 {
-    struct tid_usr_data usr_data = { .buffer = TIDs, .size = tid_size, .fill = 0 };
-    int ret = mt_uhf_get_data("AT+TID", _inventory_read_tid_cb, &usr_data, timeout_ms);
+    struct tid_usr_data usr_data = { .buffer = TIDs, .size = tid_size, .found = 0 };
+    mt_uhf_errorcode_t  ret =
+        mt_uhf_get_data("AT+TID", _inventory_read_tid_cb, &usr_data, timeout_ms);
     if (ret)
         return ret;
-    return usr_data.fill;
+    return usr_data.found;
 }
 
-static int _inventory_inv_data_cb(const char *prefix, char *data, bool finalized)
+static mt_uhf_errorcode_t _inventory_inv_data_cb(const char *prefix, char *data, bool finalized)
 {
     mt_rfid_reader_assert(data && prefix, "Missing data or prefix");
     bool continious;
@@ -135,23 +162,23 @@ static int _inventory_inv_data_cb(const char *prefix, char *data, bool finalized
     else if (!strcmp(prefix_CINV, prefix) || !strcmp(prefix_CMINV, prefix))
         continious = true;
     else
-        return -EBADMSG;
+        return mt_uhf_errorcode_inconsistent;
 
     if (continious && finalized)
         reader.resp.state = uhf_resp_state_start;
 
     // Parse INV line and save tag information in internal buffer
     if (!data)
-        return -EBADMSG;
-    size_t len = strlen(data);
-    int    ret;
+        return mt_uhf_errorcode_format_fault;
+    size_t             len = strlen(data);
+    mt_uhf_errorcode_t ret;
     if (len >= 2 && data[0] == '<' && data[len - 1] == '>')
         ret = _parse_inv_data_info(data + 1, len - 2);
     else
         ret = _parse_inv_data_tag(data, &reader.tag.last, false);
 
     struct mt_uhf_inventory_buffer *inv_buffer;
-    inv_buffer = continious ? reader.tag.inv_buf : mt_uhf_get_usr_data();
+    inv_buffer = continious ? reader.tag.inv_buf : reader.cmd.usr_data;
     if (inv_buffer && continious && inv_buffer->antenna) {
         //known antenna so the last round was done, reset the antenna and length
         inv_buffer->antenna   = 0;
@@ -163,10 +190,10 @@ static int _inventory_inv_data_cb(const char *prefix, char *data, bool finalized
             put_to_buffer = reader.tag.cb(&reader.tag.last);
         if (put_to_buffer)
             _buffer_tag(inv_buffer);
-        return EXIT_SUCCESS; //Wait for next line
+        return mt_uhf_errorcode_success; //Wait for next line
     }
-    if (ret == -ENODATA) {   //info that no tag is in answer
-        return EXIT_SUCCESS; //Wait for next line
+    if (ret == mt_uhf_errorcode_no_data_available) { //info that no tag is in answer
+        return mt_uhf_errorcode_success;             //Wait for next line
     }
     if (ret < 0)
         return ret;
@@ -178,46 +205,56 @@ static int _inventory_inv_data_cb(const char *prefix, char *data, bool finalized
         reader.tag.cb(NULL);
     if (continious && reader.cinv_round_cb)
         reader.cinv_round_cb(inv_buffer);
-    return EXIT_SUCCESS;
+    return mt_uhf_errorcode_success;
 }
 
-int mt_uhf_inventory_reported(mt_uhf_tag_cb                   cb,
-                              struct mt_uhf_inventory_buffer *buffer,
-                              uint32_t                        run_time_ms,
-                              uint32_t                        timeout_ms)
+mt_uhf_errorcode_t mt_uhf_inventory_reported(mt_uhf_tag_cb                   cb,
+                                             struct mt_uhf_inventory_buffer *buffer,
+                                             uint32_t                        run_time_ms,
+                                             uint32_t                        timeout_ms)
 {
-    if (timeout_ms < 100 + run_time_ms)
-        return -EINVAL;
+    if (timeout_ms - run_time_ms < 100 || timeout_ms < run_time_ms)
+        return mt_uhf_errorcode_invalid_parameter;
     if (reader.state.inv_format == uhfv2_inventory_tag_data_format_unknown)
-        return -ENAVAIL;
+        return mt_uhf_errorcode_not_available;
+
     char cmd[16];
-    snprintf(cmd, sizeof(cmd), "AT+INVR=%u", run_time_ms);
+    int  retp = snprintf(cmd, sizeof(cmd), "AT+INVR=%u", run_time_ms);
+    if (retp >= sizeof(cmd))
+        return mt_uhf_errorcode_no_buffer;
+    if (retp < 0)
+        return mt_uhf_errorcode_general_fault;
 
     if (buffer) {
         buffer->tags.fill  = 0;
         buffer->tags.found = 0;
         buffer->antenna    = 0;
     }
-    reader.tag.cb = cb;
-    int ret       = mt_uhf_get_data(cmd, _inventory_invr_data_cb, buffer, timeout_ms);
-    reader.tag.cb = NULL;
+    reader.tag.cb          = cb;
+    mt_uhf_errorcode_t ret = mt_uhf_get_data(cmd, _inventory_invr_data_cb, buffer, timeout_ms);
+    reader.tag.cb          = NULL;
     return ret;
 }
 
-int mt_uhf_inventory_reported_start_continious(
-    mt_uhf_tag_cb                   cb,
-    struct mt_uhf_inventory_buffer *buffer,
-    void(round_done_cb)(struct mt_uhf_inventory_buffer *inv_buf),
-    uint32_t run_time_ms)
+mt_uhf_errorcode_t mt_uhf_inventory_reported_start_continious(mt_uhf_tag_cb cb,
+                                                              struct mt_uhf_inventory_buffer *buffer,
+                                                              cinv_round_done_cb_t round_done_cb,
+                                                              uint32_t             run_time_ms)
 {
     if (reader.state.inv_format == uhfv2_inventory_tag_data_format_unknown)
-        return -ENAVAIL;
+        return mt_uhf_errorcode_not_available;
+
     char cmd[32];
-    snprintf(cmd, sizeof(cmd), "AT+CINVR=%u", run_time_ms);
-    reader.resp.running_cinv = true;
-    int ret                  = mt_uhf_setter_call(cmd, 0);
-    if (ret == EXIT_SUCCESS) {
-        reader.cinv_round_cb = round_done_cb;
+    int  retp = snprintf(cmd, sizeof(cmd), "AT+CINVR=%u", run_time_ms);
+    if (retp >= sizeof(cmd))
+        return mt_uhf_errorcode_no_buffer;
+    if (retp < 0)
+        return mt_uhf_errorcode_general_fault;
+
+    mt_uhf_errorcode_t ret = mt_uhf_setter_call(cmd, 0);
+    if (ret == mt_uhf_errorcode_success) {
+        reader.resp.running_cinv = true;
+        reader.cinv_round_cb     = round_done_cb;
         ret                = mt_uhf_framehandler_set_data_cb(prefix_CINVR, _inventory_invr_data_cb);
         reader.resp.state  = uhf_resp_state_start;
         reader.tag.cb      = cb;
@@ -231,45 +268,56 @@ int mt_uhf_inventory_reported_start_continious(
     return ret;
 }
 
-int mt_uhf_inventory_start_continious(mt_uhf_tag_cb                   cb,
-                                      struct mt_uhf_inventory_buffer *buffer,
-                                      void(round_done_cb)(struct mt_uhf_inventory_buffer *inv_buf))
+mt_uhf_errorcode_t mt_uhf_inventory_start_continious(mt_uhf_tag_cb                   cb,
+                                                     struct mt_uhf_inventory_buffer *buffer,
+                                                     cinv_round_done_cb_t            round_done_cb)
 {
+    mt_uhf_errorcode_t ret;
     if (reader.state.inv_format == uhfv2_inventory_tag_data_format_unknown) {
-        mt_uhf_get_inventory_settings(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        ret = mt_uhf_get_inventory_settings(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        if (ret < mt_uhf_errorcode_success)
+            return ret;
         if (reader.state.inv_format == uhfv2_inventory_tag_data_format_unknown)
-            return -ENAVAIL;
+            return mt_uhf_errorcode_not_available;
     }
+
+    ret = mt_uhf_setter_call("AT+CINV", 0);
+    if (ret < mt_uhf_errorcode_success)
+        return ret;
+
     reader.resp.running_cinv = true;
-    int ret                  = mt_uhf_setter_call("AT+CINV", 0);
-    if (ret == EXIT_SUCCESS) {
-        reader.cinv_round_cb = round_done_cb;
-        ret                  = mt_uhf_framehandler_set_data_cb(prefix_CINV, _inventory_inv_data_cb);
-        reader.resp.state    = uhf_resp_state_start;
-        reader.tag.cb        = cb;
-        reader.tag.inv_buf   = buffer;
-        if (buffer) {
-            buffer->tags.fill  = 0;
-            buffer->tags.found = 0;
-            buffer->antenna    = 0;
-        }
+    reader.cinv_round_cb     = round_done_cb;
+    ret                      = mt_uhf_framehandler_set_data_cb(prefix_CINV, _inventory_inv_data_cb);
+    reader.resp.state        = uhf_resp_state_start;
+    reader.tag.cb            = cb;
+    reader.tag.inv_buf       = buffer;
+    if (buffer) {
+        buffer->tags.fill  = 0;
+        buffer->tags.found = 0;
+        buffer->antenna    = 0;
     }
+
     return ret;
 }
 
-int mt_uhf_inventory_automux_start_continious(
-    mt_uhf_tag_cb                   cb,
-    struct mt_uhf_inventory_buffer *buffer,
-    void(round_done_cb)(struct mt_uhf_inventory_buffer *inv_buf))
+mt_uhf_errorcode_t mt_uhf_inventory_automux_start_continious(mt_uhf_tag_cb                   cb,
+                                                             struct mt_uhf_inventory_buffer *buffer,
+                                                             cinv_round_done_cb_t round_done_cb)
 {
+    mt_uhf_errorcode_t ret;
     if (reader.state.inv_format == uhfv2_inventory_tag_data_format_unknown) {
-        mt_uhf_get_inventory_settings(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        ret = mt_uhf_get_inventory_settings(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        if (ret < mt_uhf_errorcode_success)
+            return ret;
         if (reader.state.inv_format == uhfv2_inventory_tag_data_format_unknown)
-            return -ENAVAIL;
+            return mt_uhf_errorcode_not_available;
     }
-    int ret                  = mt_uhf_setter_call("AT+CMINV", 0);
+    ret = mt_uhf_setter_call("AT+CMINV", 0);
+    if (ret < mt_uhf_errorcode_success)
+        return ret;
+
     reader.resp.running_cinv = true;
-    if (ret == EXIT_SUCCESS) {
+    if (ret == mt_uhf_errorcode_success) {
         reader.cinv_round_cb = round_done_cb;
         ret                = mt_uhf_framehandler_set_data_cb(prefix_CMINV, _inventory_inv_data_cb);
         reader.tag.cb      = cb;
@@ -283,7 +331,7 @@ int mt_uhf_inventory_automux_start_continious(
     return ret;
 }
 
-static int _inventory_invr_data_cb(const char *prefix, char *data, bool finalized)
+static mt_uhf_errorcode_t _inventory_invr_data_cb(const char *prefix, char *data, bool finalized)
 {
     mt_rfid_reader_assert(data && prefix, "Missing data or prefix");
     bool cinvr = !strcmp(prefix_CINVR, prefix), invr = !strcmp(prefix_INVR, prefix);
@@ -292,14 +340,14 @@ static int _inventory_invr_data_cb(const char *prefix, char *data, bool finalize
         reader.resp.state = uhf_resp_state_start;
 
     if (!data)
-        return -EBADMSG;
+        return mt_uhf_errorcode_format_fault;
     size_t                          len = strlen(data);
-    int                             ret;
-    struct mt_uhf_inventory_buffer *inv_buffer = invr ? mt_uhf_get_usr_data() : reader.tag.inv_buf;
+    mt_uhf_errorcode_t              ret;
+    struct mt_uhf_inventory_buffer *inv_buffer = invr ? reader.cmd.usr_data : reader.tag.inv_buf;
 
     if (len < 2 || data[0] != '<' || data[len - 1] != '>') {     //can't be info format
         ret = _parse_inv_data_tag(data, &reader.tag.last, true); //so it should be a tag
-        if (ret < EXIT_SUCCESS)
+        if (ret < mt_uhf_errorcode_success)
             return ret;
         //Parsed a tag successfully
         bool put_to_buffer = true;
@@ -307,13 +355,13 @@ static int _inventory_invr_data_cb(const char *prefix, char *data, bool finalize
             put_to_buffer = reader.tag.cb(&reader.tag.last);
         if (put_to_buffer)
             _buffer_tag(inv_buffer);
-        return EXIT_SUCCESS;
+        return mt_uhf_errorcode_success;
     }
 
     ret = _parse_inv_data_info(data + 1, len - 2);
-    if (ret == EXIT_SUCCESS) { //Round finished
-        if (!cinvr)            //only continious has rounds
-            return -EBADMSG;
+    if (ret == mt_uhf_errorcode_success) { //Round finished
+        if (!cinvr)                        //only continious has rounds
+            return mt_uhf_errorcode_inconsistent;
         if (inv_buffer)
             inv_buffer->antenna = reader.tag.antenna;
         reader.resp.state = uhf_resp_state_start;
@@ -321,19 +369,19 @@ static int _inventory_invr_data_cb(const char *prefix, char *data, bool finalize
             reader.tag.cb(NULL);
         if (reader.cinv_round_cb)
             reader.cinv_round_cb(inv_buffer);
-        return EXIT_SUCCESS;
+        return mt_uhf_errorcode_success;
     }
-    if (ret == -ENODATA) {       //info that no tag is in answer
-        if (cinvr ^ finalized)   //its either CINVR (expecting round end) or finished
-            return EXIT_SUCCESS; //Wait for next line
-        return -EBADMSG;
+    if (ret == mt_uhf_errorcode_no_data_available) { //info that no tag is in answer
+        if (cinvr ^ finalized)               //its either CINVR (expecting round end) or finished
+            return mt_uhf_errorcode_success; //Wait for next line
+        return mt_uhf_errorcode_inconsistent;
     }
     if (ret > 0) //Antenna count, should never happen in (C)INVR
-        return -EBADMSG;
+        return mt_uhf_errorcode_inconsistent;
     return ret;
 }
 
-static int _parse_inv_data_info(char *data, size_t len)
+static mt_uhf_errorcode_t _parse_inv_data_info(char *data, size_t len)
 {
     mt_rfid_reader_assert(data && len, "No data to parse");
     const char INV_ROUND_FINISH_ANTENNA[]    = "ROUND FINISHED, ANT=";
@@ -348,43 +396,46 @@ static int _parse_inv_data_info(char *data, size_t len)
         size_t pre_antennna_len = (sizeof(INV_ROUND_FINISH_ANTENNA) - 1);
         size_t antenna_len      = len - pre_antennna_len;
         if (antenna_len > 2 || antenna_len == 0)
-            return -EBADMSG;
+            return mt_uhf_errorcode_format_fault;
         uint8_t v = data[pre_antennna_len] - '0';
         if (v > 9)
-            return -EBADMSG;
+            return mt_uhf_errorcode_format_fault;
         uint8_t antenna = v;
         if (antenna_len == 2) {
             v = data[pre_antennna_len + 1] - '0';
             if (v > 9)
-                return -EBADMSG;
+                return mt_uhf_errorcode_format_fault;
             antenna = antenna * 10 + v;
         }
         if (antenna == 0)
-            return -EBADMSG;
+            return mt_uhf_errorcode_inconsistent;
         return antenna;
     }
     if ((len == (sizeof(INV_ROUND_FINISH_NO_ANTENNA) - 1)) &&
         !memcmp(data, INV_ROUND_FINISH_NO_ANTENNA, sizeof(INV_ROUND_FINISH_NO_ANTENNA) - 1))
     {
-#if MAX_ANTENNAS_MUXED > 1
-        return -EBADMSG;
-#endif
-        return 1;
+        //There is no antenna so without muxing thats antenna 1
+        if (MAX_ANTENNAS_MUXED == 1)
+            return 1;
+        //else it should be there
+        return mt_uhf_errorcode_format_fault;
     }
     if ((len == (sizeof(INV_NO_TAGS) - 1)) && !memcmp(data, INV_NO_TAGS, sizeof(INV_NO_TAGS) - 1)) {
         //no tags
-        return -ENODATA;
+        return mt_uhf_errorcode_no_data_available;
     }
     if ((len == (sizeof(REPORT_FINISHED) - 1)) &&
         !memcmp(data, REPORT_FINISHED, sizeof(REPORT_FINISHED) - 1))
     {
-        return 0;
+        return mt_uhf_errorcode_success;
     }
     //any other error
-    return -EFAULT;
+    return mt_uhf_errorcode_general_fault;
 }
 
-static int _parse_inv_data_tag(char *data, struct mt_uhf_gen2_tag *tag, bool reported)
+static mt_uhf_errorcode_t _parse_inv_data_tag(char                   *data,
+                                              struct mt_uhf_gen2_tag *tag,
+                                              bool                    reported)
 {
     mt_rfid_reader_assert(reader.state.inv_format != uhfv2_inventory_tag_data_format_unknown,
                           "Inventory settings unknown");
@@ -401,17 +452,17 @@ static int _parse_inv_data_tag(char *data, struct mt_uhf_gen2_tag *tag, bool rep
     if (todo & uhfv2_inventory_tag_data_format_epc) { //name space
         size_t epc_len = next_delim ? (next_delim - data) : strlen(data);
         if (epc_len % 4) //epc consists of multiples of 2 bytes -> 4 chars
-            return -EBADMSG;
-        int ret =
+            return mt_uhf_errorcode_format_fault;
+        mt_uhf_errorcode_t ret =
             mt_parse_hex_array_to_bytes(data, epc_len, true, tag->epc.data, sizeof(tag->epc.data));
-        if (ret)
+        if (ret < mt_uhf_errorcode_success)
             return ret;
         tag->epc.fill = epc_len / 2;
         todo &= ~uhfv2_inventory_tag_data_format_epc;
         //EPC parsed
     }
     if (!next_delim)
-        return (todo) ? -EBADMSG : EXIT_SUCCESS;
+        return (todo) ? mt_uhf_errorcode_inconsistent : mt_uhf_errorcode_success;
 
     if (todo & uhfv2_inventory_tag_data_format_TID) {
         //expect TID
@@ -420,17 +471,17 @@ static int _parse_inv_data_tag(char *data, struct mt_uhf_gen2_tag *tag, bool rep
         next_delim      = strchr(TID, ',');
         size_t tid_len  = next_delim ? (next_delim - TID) : strlen(TID);
         if (tid_len % 4) //TID consists of multiples of 2 bytes -> 4 chars
-            return -EBADMSG;
-        int ret =
+            return mt_uhf_errorcode_format_fault;
+        mt_uhf_errorcode_t ret =
             mt_parse_hex_array_to_bytes(TID, tid_len, true, tag->tid.data, sizeof(tag->tid.data));
-        if (ret)
+        if (ret < mt_uhf_errorcode_success)
             return ret;
         tag->tid.fill = tid_len / 2;
         todo &= ~uhfv2_inventory_tag_data_format_TID;
         //TID parsed
     }
     if (!next_delim)
-        return (todo) ? -EBADMSG : EXIT_SUCCESS;
+        return (todo) ? mt_uhf_errorcode_inconsistent : mt_uhf_errorcode_success;
 
     if (todo & uhfv2_inventory_tag_data_format_RSSI) {
         //expect RSSI
@@ -439,15 +490,16 @@ static int _parse_inv_data_tag(char *data, struct mt_uhf_gen2_tag *tag, bool rep
         next_delim       = strchr(RSSI, ',');
         size_t rssi_len  = next_delim ? (next_delim - RSSI) : strlen(RSSI);
 
-        int value, ret;
-        if ((ret = mt_parse_int(RSSI, rssi_len, &value)))
+        int                value;
+        mt_uhf_errorcode_t ret = mt_parse_int(RSSI, rssi_len, &value);
+        if (ret < mt_uhf_errorcode_success)
             return ret;
         tag->rssi = value;
         todo &= ~uhfv2_inventory_tag_data_format_RSSI;
         //RSSI parsed
     }
     if (!next_delim)
-        return (todo) ? -EBADMSG : EXIT_SUCCESS;
+        return (todo) ? mt_uhf_errorcode_inconsistent : mt_uhf_errorcode_success;
 
     if (todo & uhfv2_inventory_tag_data_format_Phase) {
         //expect phase data
@@ -456,15 +508,16 @@ static int _parse_inv_data_tag(char *data, struct mt_uhf_gen2_tag *tag, bool rep
         const char *phase[2] = { next_delim + 1 };
         next_delim           = strchr(phase[0], ',');
         if (!next_delim)
-            return -EBADMSG;
+            return mt_uhf_errorcode_inconsistent;
         size_t phase_len[2] = { next_delim - phase[0], 0 };
         phase[1]            = next_delim + 1;
         next_delim          = strchr(phase[1], ',');
         phase_len[1]        = next_delim ? (next_delim - phase[1]) : strlen(phase[1]);
 
         for (int p = 0; p < 2; p++) {
-            int v, ret = mt_parse_int(phase[p], phase_len[p], &v);
-            if (ret)
+            int                v;
+            mt_uhf_errorcode_t ret = mt_parse_int(phase[p], phase_len[p], &v);
+            if (ret < mt_uhf_errorcode_success)
                 return ret;
             tag->phase[p] = v;
         }
@@ -472,7 +525,7 @@ static int _parse_inv_data_tag(char *data, struct mt_uhf_gen2_tag *tag, bool rep
         //Phase parsed
     }
     if (!next_delim)
-        return (reported) ? -EBADMSG : EXIT_SUCCESS;
+        return (reported) ? mt_uhf_errorcode_format_fault : mt_uhf_errorcode_success;
 
     if (reported) {
         //expect a report (inventory count), 1 unsigned int
@@ -480,15 +533,17 @@ static int _parse_inv_data_tag(char *data, struct mt_uhf_gen2_tag *tag, bool rep
         next_delim         = strchr(report, ',');
         size_t report_len  = next_delim ? (next_delim - report) : strlen(report);
 
-        int v, ret = mt_parse_int(report, report_len, &v);
-        if (ret)
+        int                v;
+        mt_uhf_errorcode_t ret = mt_parse_int(report, report_len, &v);
+        if (ret < mt_uhf_errorcode_success)
             return ret;
         if (v < 0)
-            return -EBADMSG;
+            return mt_uhf_errorcode_format_fault;
         tag->count = v;
         reported   = false;
     }
-    return (todo || next_delim || reported) ? -EBADMSG : EXIT_SUCCESS;
+    return (todo || next_delim || reported) ? mt_uhf_errorcode_format_fault :
+                                              mt_uhf_errorcode_success;
 }
 
 static inline void _buffer_tag(struct mt_uhf_inventory_buffer *inv_buffer)
@@ -501,7 +556,7 @@ static inline void _buffer_tag(struct mt_uhf_inventory_buffer *inv_buffer)
                           "Tag buffering fill error");
 
     inv_buffer->tags.found++;
-    if (!inv_buffer->tags.size || inv_buffer->tags.fill >= inv_buffer->tags.size - 1)
+    if (!inv_buffer->tags.size || inv_buffer->tags.fill >= inv_buffer->tags.size)
         return;
     memcpy(
         inv_buffer->tags.buffer + inv_buffer->tags.fill, &reader.tag.last, sizeof(reader.tag.last));
